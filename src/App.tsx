@@ -260,18 +260,34 @@ async function submitSupabaseAuth(mode: 'login' | 'signup', email: string, passw
     method: 'POST',
     headers: {
       apikey: config.anonKey,
+      Authorization: `Bearer ${config.anonKey}`,
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({ email, password })
   });
   const result = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(typeof result.error_description === 'string' ? result.error_description : '登录失败，请检查账号密码。');
+    throw new Error(getSupabaseAuthErrorMessage(result));
   }
   if (!result.access_token) {
-    throw new Error('账号已创建，但还没有返回登录会话。请检查 Supabase 是否关闭了邮箱验证。');
+    if (mode === 'signup') {
+      throw new Error('账号已创建，但 Supabase 要求先验证邮箱。请去邮箱点确认链接，或在 Supabase 里关闭 Confirm email 后再注册。');
+    }
+    throw new Error('没有拿到登录会话。请确认邮箱已验证，或重新登录。');
   }
   return result as AuthSession;
+}
+
+function getSupabaseAuthErrorMessage(result: Record<string, unknown>) {
+  const raw = [result.error_description, result.msg, result.message, result.error]
+    .find((value) => typeof value === 'string' && value.trim().length > 0);
+  const text = typeof raw === 'string' ? raw : '';
+  if (/Invalid login credentials/i.test(text)) return '账号或密码不匹配。如果刚注册过，请先确认邮箱是否需要验证。';
+  if (/Email not confirmed/i.test(text)) return '这个账号还没有完成邮箱验证。请去邮箱点确认链接，或在 Supabase 里关闭 Confirm email。';
+  if (/User already registered/i.test(text)) return '这个邮箱已经注册过了，请切换到登录。';
+  if (/Password should be at least/i.test(text)) return '密码长度不够，至少需要 6 位。';
+  if (/signup/i.test(text) && /disabled/i.test(text)) return 'Supabase 还没有开启邮箱注册，请在 Authentication 的 Email Provider 里开启。';
+  return text || '登录失败，请检查 Supabase 登录配置和账号密码。';
 }
 
 function createPortfolioPreviewData(): AssistantData {
