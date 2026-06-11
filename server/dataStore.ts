@@ -1,8 +1,8 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { correctTranscribedTextWithAi, parseTextWithAi } from './aiAdapter';
-import { getRequestUserId } from './requestContext';
-import type { EventRecord, GoalRecord, ParseResult, ProfileData, ReminderRecord, ReviewRecord, SourceType, TaskRecord, TodoProjectRecord, WorkLogRecord } from './types';
+import { correctTranscribedTextWithAi, parseTextWithAi } from './aiAdapter.js';
+import { getRequestUserId } from './requestContext.js';
+import type { EventRecord, GoalRecord, ParseResult, ProfileData, ReminderRecord, ReviewRecord, SourceType, TaskRecord, TodoProjectRecord, WorkLogRecord } from './types.js';
 
 const dataDir = join(process.cwd(), 'personal-assistant-data');
 const useSupabaseStorage = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);

@@ -1,6 +1,6 @@
 import Fastify from 'fastify';
-import { verifySupabaseUserId } from './auth';
-import { getAiStatus } from './aiAdapter';
+import { verifySupabaseUserId } from './auth.js';
+import { getAiStatus } from './aiAdapter.js';
 import {
   appendWorkLog,
   cancelEvent,
@@ -25,9 +25,9 @@ import {
   updateTodoProject,
   updateTask,
   updateWorkLog
-} from './dataStore';
-import { enterRequestContext } from './requestContext';
-import type { ParseResult, TaskRecord } from './types';
+} from './dataStore.js';
+import { enterRequestContext } from './requestContext.js';
+import type { ParseResult, TaskRecord } from './types.js';
 
 export function buildApp() {
 const app = Fastify({ logger: true });

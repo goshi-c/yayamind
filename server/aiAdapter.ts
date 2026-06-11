@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { ParseResult, ParsedIntent } from './types';
+import type { ParseResult, ParsedIntent } from './types.js';
 
 const allowedIntents: ParsedIntent[] = [
   'add_event',

@@ -1,4 +1,4 @@
-import { buildApp } from '../server/index';
+import { buildApp } from '../server/index.js';
 
 const app = buildApp();
 const ready = app.ready();
