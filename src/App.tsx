@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react';
+﻿import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type MouseEvent as ReactMouseEvent } from 'react';
 import ragdollAvatar from './assets/ragdoll-avatar.png';
 
 type AssistantData = {
@@ -134,6 +134,15 @@ type ProfileData = {
   updatedAt: string;
 };
 
+type AuthSession = {
+  access_token: string;
+  refresh_token?: string;
+  user?: {
+    id?: string;
+    email?: string;
+  };
+};
+
 type ParsedIntent =
   | 'add_event'
   | 'update_event'
@@ -213,6 +222,57 @@ const emptyData: AssistantData = {
 };
 
 const portfolioPreviewData = createPortfolioPreviewData();
+const authStorageKey = 'yayamind.auth.session';
+
+function getSupabaseAuthConfig() {
+  const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+  const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+  return url && anonKey ? { url: url.replace(/\/+$/, ''), anonKey } : null;
+}
+
+function isHostedApp() {
+  if (typeof window === 'undefined') return false;
+  return !['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
+}
+
+function readStoredAuthSession(): AuthSession | null {
+  try {
+    const raw = window.localStorage.getItem(authStorageKey);
+    return raw ? (JSON.parse(raw) as AuthSession) : null;
+  } catch {
+    return null;
+  }
+}
+
+function storeAuthSession(session: AuthSession | null) {
+  if (!session) {
+    window.localStorage.removeItem(authStorageKey);
+    return;
+  }
+  window.localStorage.setItem(authStorageKey, JSON.stringify(session));
+}
+
+async function submitSupabaseAuth(mode: 'login' | 'signup', email: string, password: string) {
+  const config = getSupabaseAuthConfig();
+  if (!config) throw new Error('Supabase 登录还没有配置好。');
+  const endpoint = mode === 'login' ? '/auth/v1/token?grant_type=password' : '/auth/v1/signup';
+  const response = await fetch(`${config.url}${endpoint}`, {
+    method: 'POST',
+    headers: {
+      apikey: config.anonKey,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ email, password })
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(typeof result.error_description === 'string' ? result.error_description : '登录失败，请检查账号密码。');
+  }
+  if (!result.access_token) {
+    throw new Error('账号已创建，但还没有返回登录会话。请检查 Supabase 是否关闭了邮箱验证。');
+  }
+  return result as AuthSession;
+}
 
 function createPortfolioPreviewData(): AssistantData {
   const now = new Date();
@@ -408,9 +468,17 @@ function createPortfolioPreviewData(): AssistantData {
 }
 
 export function App() {
+  const authConfig = getSupabaseAuthConfig();
+  const authRequired = isHostedApp() && Boolean(authConfig);
   const [data, setData] = useState<AssistantData>(emptyData);
   const [input, setInput] = useState('');
   const [message, setMessage] = useState('');
+  const [authSession, setAuthSession] = useState<AuthSession | null>(() => readStoredAuthSession());
+  const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authMessage, setAuthMessage] = useState('');
+  const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
   const [parsePreview, setParsePreview] = useState<ParseResult | null>(null);
   const [pendingClarification, setPendingClarification] = useState<ParseResult | null>(null);
   const [pendingDecision, setPendingDecision] = useState<ParseResult | null>(null);
@@ -454,10 +522,25 @@ export function App() {
   const seenTriggeredReminderIds = useRef(new Set<string>());
 
   useEffect(() => {
+    const nativeFetch = window.fetch.bind(window);
+    window.fetch = (resource, options = {}) => {
+      const url = typeof resource === 'string' ? resource : resource instanceof URL ? resource.toString() : resource.url;
+      if (!url.startsWith('/api') || !authSession?.access_token) return nativeFetch(resource, options);
+      const headers = new Headers(options.headers ?? (resource instanceof Request ? resource.headers : undefined));
+      headers.set('Authorization', `Bearer ${authSession.access_token}`);
+      return nativeFetch(resource, { ...options, headers });
+    };
+    return () => {
+      window.fetch = nativeFetch;
+    };
+  }, [authSession?.access_token]);
+
+  useEffect(() => {
+    if (authRequired && !authSession) return;
     refreshData().catch(() => {
       setData(portfolioPreviewData);
     });
-  }, []);
+  }, [authRequired, authSession?.access_token]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 60_000);
@@ -482,10 +565,11 @@ export function App() {
 
   useEffect(() => {
     const timer = window.setInterval(() => {
+      if (authRequired && !authSession) return;
       refreshData().catch(() => undefined);
     }, 30_000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [authRequired, authSession?.access_token]);
 
   useEffect(() => {
     const freshTriggered = data.today.reminders.find(
@@ -519,6 +603,32 @@ export function App() {
     const permission = await Notification.requestPermission();
     setNotificationPermission(permission);
     setMessage(permission === 'granted' ? '浏览器通知已开启。' : '没关系，我先在页面里提醒你。');
+  }
+
+  async function submitAuth(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setIsAuthSubmitting(true);
+    setAuthMessage('');
+    try {
+      const session = await submitSupabaseAuth(authMode, authEmail.trim(), authPassword);
+      setAuthSession(session);
+      storeAuthSession(session);
+      setAuthPassword('');
+      setData(emptyData);
+    } catch (error) {
+      setAuthMessage(error instanceof Error ? error.message : '登录失败，请稍后再试。');
+    } finally {
+      setIsAuthSubmitting(false);
+    }
+  }
+
+  function logout() {
+    setAuthSession(null);
+    storeAuthSession(null);
+    setData(portfolioPreviewData);
+    setAuthMode('login');
+    setAuthPassword('');
+    setMessage('');
   }
 
   async function refreshData() {
@@ -1799,6 +1909,45 @@ export function App() {
   );
   const shouldShowCatDialog = hasActiveCatContent;
 
+  if (authRequired && !authSession) {
+    return (
+      <main className="auth-shell">
+        <section className="auth-panel">
+          <div className="auth-brand">
+            <span>Yaya</span>
+            <span>Mind</span>
+          </div>
+          <form className="auth-form" onSubmit={submitAuth}>
+            <p className="eyebrow">{authMode === 'login' ? '登录账号' : '创建账号'}</p>
+            <h1>{authMode === 'login' ? '打开你的个人助手' : '第一次使用 YayaMind'}</h1>
+            <label>
+              邮箱
+              <input type="email" value={authEmail} autoComplete="email" onChange={(event) => setAuthEmail(event.target.value)} required />
+            </label>
+            <label>
+              密码
+              <input type="password" value={authPassword} autoComplete={authMode === 'login' ? 'current-password' : 'new-password'} minLength={6} onChange={(event) => setAuthPassword(event.target.value)} required />
+            </label>
+            {authMessage ? <p className="auth-message">{authMessage}</p> : null}
+            <button className="auth-submit" type="submit" disabled={isAuthSubmitting}>
+              {isAuthSubmitting ? '处理中' : authMode === 'login' ? '登录' : '注册并进入'}
+            </button>
+            <button
+              className="auth-switch"
+              type="button"
+              onClick={() => {
+                setAuthMode((mode) => (mode === 'login' ? 'signup' : 'login'));
+                setAuthMessage('');
+              }}
+            >
+              {authMode === 'login' ? '第一次用，创建账号' : '已有账号，返回登录'}
+            </button>
+          </form>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className={`app-shell ${draggedTodoTaskId ? 'todo-dragging' : ''}`} style={{ gridTemplateColumns: `76px minmax(0, 1fr) 8px ${rightPanelWidth}px` }}>
       <aside className="sidebar">
@@ -1817,6 +1966,12 @@ export function App() {
             <span className="nav-label">{item}</span>
           </button>
         ))}
+        {authSession ? (
+          <button className="nav-item logout-button" title="退出账号" onClick={logout}>
+            <span className="nav-icon">↩</span>
+            <span className="nav-label">退出</span>
+          </button>
+        ) : null}
       </aside>
 
       <section className="calendar-panel">
@@ -3280,4 +3435,5 @@ function getCommitMessage(result?: ParseResult, resolvedBy?: string, feedback?: 
   };
   return messages[result.intent];
 }
+
 

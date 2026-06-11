@@ -69,7 +69,9 @@ In this mode, the same `/api/*` routes run on Vercel. Local development still wr
 
 ### Supabase Setup
 
-Create a Supabase project, then run this SQL in the Supabase SQL editor:
+Create a Supabase project. This part must be done in the user's own Supabase account because it creates private database credentials.
+
+Then run this SQL in the Supabase SQL editor:
 
 ```sql
 create table if not exists public.yayamind_store (
@@ -79,12 +81,36 @@ create table if not exists public.yayamind_store (
 );
 ```
 
-Then add these Vercel environment variables:
+### Supabase Auth Setup
+
+YayaMind uses Supabase email/password auth.
+
+In Supabase:
+
+1. Go to `Authentication` -> `Providers`.
+2. Enable `Email`.
+3. For the easiest first deployment, turn off email confirmation:
+   - `Authentication` -> `Sign In / Providers` -> `Email`
+   - Disable `Confirm email`
+4. If email confirmation stays enabled, the first registered account must confirm email before login works.
+
+Each account gets its own data namespace in `yayamind_store`, so logging out and logging into another account switches to another dataset.
+
+### Vercel Environment Variables
+
+Add these backend variables in Vercel:
 
 ```text
 SUPABASE_URL=https://<your-project-ref>.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=<your Supabase service_role key>
 SUPABASE_YAYAMIND_TABLE=yayamind_store
+```
+
+Add these frontend variables in Vercel:
+
+```text
+VITE_SUPABASE_URL=https://<your-project-ref>.supabase.co
+VITE_SUPABASE_ANON_KEY=<your Supabase anon public key>
 ```
 
 Optional AI variables:
@@ -97,25 +123,30 @@ DEEPSEEK_MODEL=deepseek-chat
 Important:
 
 - Use `service_role` only in Vercel environment variables, never in frontend code.
-- Do not prefix these variables with `VITE_`.
+- Only the public anon key should use `VITE_`.
 - After changing environment variables, redeploy the Vercel project.
 
 ### Current Cloud Scope
 
-This is a single-user cloud mode. Anyone who can open the site can write to the same YayaMind dataset unless access control is added.
+This is an account-based cloud mode.
 
-For sharing with interviewers, keep the link as a portfolio demo. For private daily use, avoid posting the editable link publicly until login or password protection is added.
+Behavior:
+
+- If Supabase env vars are not configured, the public Vercel URL shows demo data.
+- If Supabase env vars are configured, the public Vercel URL shows a login/register screen.
+- Logged-in users can write their own cloud data.
+- The sidebar has a logout button for switching accounts.
 
 Next production step:
 
-- Add simple access control, either Vercel Deployment Protection, a shared password, or Supabase Auth.
 - Later split the single storage table into normalized event/task/reminder tables if multi-user use becomes important.
 
 ## Recommended Roadmap
 
 1. Deploy the current portfolio preview to Vercel.
 2. Use the public URL for interviews and portfolio sharing.
-3. Add Supabase environment variables in Vercel.
+3. Enable Supabase Email Auth.
+4. Add Supabase environment variables in Vercel.
 4. Redeploy and test `/api/bootstrap`.
-5. Add access control before sharing the editable version broadly.
+5. Register the first account from the YayaMind login page.
 6. Keep the local-first version as a private mode for Obsidian/file-based workflows.

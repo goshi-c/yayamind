@@ -68,7 +68,7 @@ AI 配置：
 
 当前项目支持 Vercel 作品集预览：本地后端可用时使用真实数据；线上没有 `/api` 后端时，会自动进入演示数据，保证面试官打开链接能看到产品形态。
 
-真实跨设备使用已预留 Vercel `/api` Serverless + Supabase 存储模式。配置 Supabase 环境变量后，线上同一个网址可以通过云端 API 保存数据。具体步骤见 [DEPLOYMENT.md](DEPLOYMENT.md)。
+真实跨设备使用已预留 Vercel `/api` Serverless + Supabase 存储模式。配置 Supabase Auth 和环境变量后，线上同一个网址会先登录，再通过云端 API 保存当前账号的数据。具体步骤见 [DEPLOYMENT.md](DEPLOYMENT.md)。
 
 ## 数据文件
 

@@ -1,4 +1,5 @@
 import Fastify from 'fastify';
+import { verifySupabaseUserId } from './auth';
 import { getAiStatus } from './aiAdapter';
 import {
   appendWorkLog,
@@ -25,10 +26,24 @@ import {
   updateTask,
   updateWorkLog
 } from './dataStore';
+import { enterRequestContext } from './requestContext';
 import type { ParseResult, TaskRecord } from './types';
 
 export function buildApp() {
 const app = Fastify({ logger: true });
+const requireAuth = process.env.VERCEL === '1' && Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
+
+app.addHook('onRequest', async (request, reply) => {
+  if (!requireAuth) {
+    enterRequestContext({ userId: null });
+    return;
+  }
+  const userId = await verifySupabaseUserId(request.headers.authorization);
+  if (!userId) {
+    return reply.code(401).send({ ok: false, error: 'login required' });
+  }
+  enterRequestContext({ userId });
+});
 
 app.get('/api/bootstrap', async () => getBootstrapData());
 

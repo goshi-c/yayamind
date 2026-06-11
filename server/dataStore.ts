@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { correctTranscribedTextWithAi, parseTextWithAi } from './aiAdapter';
+import { getRequestUserId } from './requestContext';
 import type { EventRecord, GoalRecord, ParseResult, ProfileData, ReminderRecord, ReviewRecord, SourceType, TaskRecord, TodoProjectRecord, WorkLogRecord } from './types';
 
 const dataDir = join(process.cwd(), 'personal-assistant-data');
@@ -1175,9 +1176,13 @@ async function supabaseRequest<T = unknown>(path: string, init: RequestInit): Pr
 }
 
 function storageKey(path: string) {
-  return path.startsWith(dataDir)
+  const key = path.startsWith(dataDir)
     ? path.slice(dataDir.length).replace(/^[/\\]+/, '').replace(/\\/g, '/')
     : path.replace(/\\/g, '/');
+  if (!useSupabaseStorage) return key;
+  const userId = getRequestUserId();
+  if (!userId) throw new Error('Missing authenticated user context');
+  return `${userId}/${key}`;
 }
 
 function createDefaultSettings(): AppSettings {
