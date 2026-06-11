@@ -27,6 +27,7 @@ import {
 } from './dataStore';
 import type { ParseResult, TaskRecord } from './types';
 
+export function buildApp() {
 const app = Fastify({ logger: true });
 
 app.get('/api/bootstrap', async () => getBootstrapData());
@@ -166,9 +167,21 @@ app.patch<{ Params: { id: string }; Body: { note?: string; at?: string } }>('/ap
 
 app.delete<{ Params: { id: string } }>('/api/work-logs/:id', async (request) => deleteWorkLog(request.params.id));
 
-await ensureDataFiles();
+return app;
+}
 
-await app.listen({ port: 8787, host: '127.0.0.1' });
+export async function startLocalServer() {
+  const app = buildApp();
+  await ensureDataFiles();
+  await app.listen({ port: 8787, host: '127.0.0.1' });
+}
+
+if (process.env.VERCEL !== '1') {
+  startLocalServer().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}
 
 function summarizeParseResult(result?: ParseResult) {
   if (!result) return null;

@@ -56,28 +56,66 @@ These are already covered by `.gitignore`.
 
 Opening a Vercel frontend alone is not enough for real use, because Vercel's static frontend cannot write to `personal-assistant-data/` on the user's computer.
 
-To make YayaMind usable from any browser as a real product, the local backend/data layer should be migrated to:
+YayaMind now supports a first cloud-backed mode:
 
 ```text
 Vercel frontend
-+ hosted API
-+ cloud database
-+ user login
-+ per-user data isolation
-+ AI key / usage control
++ Vercel /api serverless functions
++ Supabase storage table
++ optional DeepSeek API key
 ```
 
-Recommended next architecture:
+In this mode, the same `/api/*` routes run on Vercel. Local development still writes to `personal-assistant-data/`; production writes to Supabase when the environment variables below are set.
 
-- Frontend: keep Vite + Vercel.
-- API: Vercel Serverless Functions, Railway, Render, or Fly.io.
-- Database: Supabase or Neon Postgres.
-- Auth: Supabase Auth or Clerk.
-- AI: server-side DeepSeek key with limits, or user-provided API key stored per user.
+### Supabase Setup
+
+Create a Supabase project, then run this SQL in the Supabase SQL editor:
+
+```sql
+create table if not exists public.yayamind_store (
+  key text primary key,
+  content text not null,
+  updated_at timestamptz not null default now()
+);
+```
+
+Then add these Vercel environment variables:
+
+```text
+SUPABASE_URL=https://<your-project-ref>.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=<your Supabase service_role key>
+SUPABASE_YAYAMIND_TABLE=yayamind_store
+```
+
+Optional AI variables:
+
+```text
+DEEPSEEK_API_KEY=<your DeepSeek key>
+DEEPSEEK_MODEL=deepseek-chat
+```
+
+Important:
+
+- Use `service_role` only in Vercel environment variables, never in frontend code.
+- Do not prefix these variables with `VITE_`.
+- After changing environment variables, redeploy the Vercel project.
+
+### Current Cloud Scope
+
+This is a single-user cloud mode. Anyone who can open the site can write to the same YayaMind dataset unless access control is added.
+
+For sharing with interviewers, keep the link as a portfolio demo. For private daily use, avoid posting the editable link publicly until login or password protection is added.
+
+Next production step:
+
+- Add simple access control, either Vercel Deployment Protection, a shared password, or Supabase Auth.
+- Later split the single storage table into normalized event/task/reminder tables if multi-user use becomes important.
 
 ## Recommended Roadmap
 
 1. Deploy the current portfolio preview to Vercel.
 2. Use the public URL for interviews and portfolio sharing.
-3. Add a cloud backend and database for real personal use.
-4. Keep the local-first version as a private mode for Obsidian/file-based workflows.
+3. Add Supabase environment variables in Vercel.
+4. Redeploy and test `/api/bootstrap`.
+5. Add access control before sharing the editable version broadly.
+6. Keep the local-first version as a private mode for Obsidian/file-based workflows.

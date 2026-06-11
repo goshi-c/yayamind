@@ -4,6 +4,9 @@ import { correctTranscribedTextWithAi, parseTextWithAi } from './aiAdapter';
 import type { EventRecord, GoalRecord, ParseResult, ProfileData, ReminderRecord, ReviewRecord, SourceType, TaskRecord, TodoProjectRecord, WorkLogRecord } from './types';
 
 const dataDir = join(process.cwd(), 'personal-assistant-data');
+const useSupabaseStorage = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
+const requireCloudStorage = process.env.VERCEL === '1' && !useSupabaseStorage;
+const supabaseTable = process.env.SUPABASE_YAYAMIND_TABLE || 'yayamind_store';
 
 const files = {
   events: join(dataDir, 'events.jsonl'),
@@ -52,7 +55,10 @@ type WeatherAlert = {
 };
 
 export async function ensureDataFiles() {
-  await mkdir(dataDir, { recursive: true });
+  if (requireCloudStorage) {
+    throw new Error('Cloud storage is not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.');
+  }
+  if (!useSupabaseStorage) await mkdir(dataDir, { recursive: true });
   await ensureFile(files.events, '');
   await ensureFile(files.tasks, '');
   await ensureFile(files.workLogs, '');
@@ -61,7 +67,7 @@ export async function ensureDataFiles() {
   await ensureFile(files.goals, JSON.stringify({ goals: [] }, null, 2));
   await ensureFile(files.todoProjects, JSON.stringify({ projects: [] }, null, 2));
   await ensureFile(files.profiles, JSON.stringify(createDefaultProfile(), null, 2));
-  await mkdir(files.summariesDir, { recursive: true });
+  if (!useSupabaseStorage) await mkdir(files.summariesDir, { recursive: true });
   await ensureFile(
     files.settings,
     JSON.stringify(createDefaultSettings(), null, 2)
@@ -915,7 +921,7 @@ export async function createGoal(title: string, targetDate: string | null = null
     updatedAt: now
   };
   const nextGoals = [...goals, goal];
-  await writeFile(files.goals, JSON.stringify({ goals: nextGoals }, null, 2), 'utf8');
+  await writeTextFile(files.goals, JSON.stringify({ goals: nextGoals }, null, 2));
   return { ok: true, goal };
 }
 
@@ -924,7 +930,7 @@ export async function updateGoalStatus(id: string, status: GoalRecord['status'])
   const now = new Date().toISOString();
   const goals = await readGoals();
   const nextGoals = goals.map((goal) => (goal.id === id ? { ...goal, status, updatedAt: now } : goal));
-  await writeFile(files.goals, JSON.stringify({ goals: nextGoals }, null, 2), 'utf8');
+  await writeTextFile(files.goals, JSON.stringify({ goals: nextGoals }, null, 2));
   return { ok: goals.some((goal) => goal.id === id), id, status };
 }
 
@@ -979,7 +985,7 @@ export async function generateMarkdownSummary(kind: 'daily' | 'weekly' = 'daily'
     ''
   ];
   const path = join(files.summariesDir, fileName);
-  await writeFile(path, lines.join('\n'), 'utf8');
+  await writeTextFile(path, lines.join('\n'));
   return { ok: true, file: path, title, kind };
 }
 
@@ -1036,15 +1042,14 @@ function buildConflictOptions(conflicts: Array<{ type: string; event: EventRecor
 
 async function ensureFile(path: string, fallback: string) {
   try {
-    await readFile(path, 'utf8');
+    await readTextFile(path);
   } catch {
-    await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, fallback, 'utf8');
+    await writeTextFile(path, fallback);
   }
 }
 
 async function readJsonl<T>(path: string): Promise<T[]> {
-  const content = await readFile(path, 'utf8');
+  const content = await readTextFile(path);
   return content
     .split('\n')
     .map((line) => line.trim())
@@ -1059,18 +1064,18 @@ async function readJsonl<T>(path: string): Promise<T[]> {
 }
 
 async function appendJsonl(path: string, value: unknown) {
-  const current = await readFile(path, 'utf8');
+  const current = await readTextFile(path);
   const prefix = current.trim().length > 0 && !current.endsWith('\n') ? '\n' : '';
-  await writeFile(path, `${current}${prefix}${JSON.stringify(value)}\n`, 'utf8');
+  await writeTextFile(path, `${current}${prefix}${JSON.stringify(value)}\n`);
 }
 
 async function writeJsonl(path: string, values: unknown[]) {
-  await writeFile(path, values.map((value) => JSON.stringify(value)).join('\n') + (values.length ? '\n' : ''), 'utf8');
+  await writeTextFile(path, values.map((value) => JSON.stringify(value)).join('\n') + (values.length ? '\n' : ''));
 }
 
 async function readGoals(): Promise<GoalRecord[]> {
   try {
-    const content = await readFile(files.goals, 'utf8');
+    const content = await readTextFile(files.goals);
     const parsed = JSON.parse(content) as { goals?: GoalRecord[] };
     return Array.isArray(parsed.goals) ? parsed.goals : [];
   } catch {
@@ -1080,7 +1085,7 @@ async function readGoals(): Promise<GoalRecord[]> {
 
 async function readTodoProjects(): Promise<TodoProjectRecord[]> {
   try {
-    const content = await readFile(files.todoProjects, 'utf8');
+    const content = await readTextFile(files.todoProjects);
     const parsed = JSON.parse(content) as { projects?: TodoProjectRecord[] };
     return Array.isArray(parsed.projects) ? parsed.projects : [];
   } catch {
@@ -1089,12 +1094,12 @@ async function readTodoProjects(): Promise<TodoProjectRecord[]> {
 }
 
 async function writeTodoProjects(projects: TodoProjectRecord[]) {
-  await writeFile(files.todoProjects, JSON.stringify({ projects }, null, 2), 'utf8');
+  await writeTextFile(files.todoProjects, JSON.stringify({ projects }, null, 2));
 }
 
 async function readProfile(): Promise<ProfileData> {
   try {
-    const content = await readFile(files.profiles, 'utf8');
+    const content = await readTextFile(files.profiles);
     return { ...createDefaultProfile(), ...(JSON.parse(content) as Partial<ProfileData>) };
   } catch {
     return createDefaultProfile();
@@ -1103,7 +1108,7 @@ async function readProfile(): Promise<ProfileData> {
 
 async function readSettings(): Promise<AppSettings> {
   try {
-    const content = await readFile(files.settings, 'utf8');
+    const content = await readTextFile(files.settings);
     const stored = JSON.parse(content) as Partial<AppSettings>;
     const defaults = createDefaultSettings();
     return {
@@ -1116,6 +1121,63 @@ async function readSettings(): Promise<AppSettings> {
   } catch {
     return createDefaultSettings();
   }
+}
+
+async function readTextFile(path: string) {
+  if (!useSupabaseStorage) return readFile(path, 'utf8');
+  const stored = await supabaseRequest<Array<{ content: string }>>(
+    `/rest/v1/${supabaseTable}?key=eq.${encodeURIComponent(storageKey(path))}&select=content`,
+    { method: 'GET' }
+  );
+  const content = stored[0]?.content;
+  if (typeof content !== 'string') throw new Error(`Missing cloud storage key: ${storageKey(path)}`);
+  return content;
+}
+
+async function writeTextFile(path: string, content: string) {
+  if (!useSupabaseStorage) {
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, content, 'utf8');
+    return;
+  }
+  await supabaseRequest(`/rest/v1/${supabaseTable}`, {
+    method: 'POST',
+    headers: {
+      Prefer: 'resolution=merge-duplicates,return=minimal'
+    },
+    body: JSON.stringify({
+      key: storageKey(path),
+      content,
+      updated_at: new Date().toISOString()
+    })
+  });
+}
+
+async function supabaseRequest<T = unknown>(path: string, init: RequestInit): Promise<T> {
+  const url = `${process.env.SUPABASE_URL?.replace(/\/+$/, '')}${path}`;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? '';
+  const response = await fetch(url, {
+    ...init,
+    headers: {
+      apikey: serviceKey,
+      Authorization: `Bearer ${serviceKey}`,
+      'Content-Type': 'application/json',
+      ...(init.headers ?? {})
+    }
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    throw new Error(`Supabase storage request failed: ${response.status} ${detail}`);
+  }
+  if (response.status === 204) return undefined as T;
+  const text = await response.text();
+  return (text ? JSON.parse(text) : undefined) as T;
+}
+
+function storageKey(path: string) {
+  return path.startsWith(dataDir)
+    ? path.slice(dataDir.length).replace(/^[/\\]+/, '').replace(/\\/g, '/')
+    : path.replace(/\\/g, '/');
 }
 
 function createDefaultSettings(): AppSettings {
