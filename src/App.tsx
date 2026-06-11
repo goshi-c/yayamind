@@ -1829,12 +1829,6 @@ export function App() {
       </aside>
 
       <section className="calendar-panel">
-        {isPreviewMode ? (
-          <div className="preview-banner">
-            <strong>作品集预览</strong>
-            <span>当前未连接个人后端，页面展示演示数据；真实写入会在云端后端/数据库接好后开放。</span>
-          </div>
-        ) : null}
         {viewMode === 'week' ? (
           <>
             <header className="panel-header calendar-toolbar">
