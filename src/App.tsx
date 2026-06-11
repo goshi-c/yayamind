@@ -214,11 +214,6 @@ const emptyData: AssistantData = {
 
 const portfolioPreviewData = createPortfolioPreviewData();
 
-function isHostedPreview() {
-  if (typeof window === 'undefined') return false;
-  return !['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
-}
-
 function createPortfolioPreviewData(): AssistantData {
   const now = new Date();
   const today = toLocalDateText(now);
@@ -416,7 +411,6 @@ export function App() {
   const [data, setData] = useState<AssistantData>(emptyData);
   const [input, setInput] = useState('');
   const [message, setMessage] = useState('');
-  const [isPreviewMode, setIsPreviewMode] = useState(false);
   const [parsePreview, setParsePreview] = useState<ParseResult | null>(null);
   const [pendingClarification, setPendingClarification] = useState<ParseResult | null>(null);
   const [pendingDecision, setPendingDecision] = useState<ParseResult | null>(null);
@@ -462,8 +456,6 @@ export function App() {
   useEffect(() => {
     refreshData().catch(() => {
       setData(portfolioPreviewData);
-      setIsPreviewMode(true);
-      setMessage(isHostedPreview() ? '当前是作品集只读预览。真实使用需要连接后端和数据库。' : '本地后端还没启动，先看到作品集预览。');
     });
   }, []);
 
@@ -534,7 +526,6 @@ export function App() {
       if (!res.ok) throw new Error('bootstrap failed');
       return res.json();
     });
-    setIsPreviewMode(false);
     setData(nextData);
     return nextData as AssistantData;
   }
