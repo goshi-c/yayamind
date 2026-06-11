@@ -287,6 +287,7 @@ function getSupabaseAuthErrorMessage(result: Record<string, unknown>) {
   if (/User already registered/i.test(text)) return '这个邮箱已经注册过了，请切换到登录。';
   if (/Password should be at least/i.test(text)) return '密码长度不够，至少需要 6 位。';
   if (/signup/i.test(text) && /disabled/i.test(text)) return 'Supabase 还没有开启邮箱注册，请在 Authentication 的 Email Provider 里开启。';
+  if (/security purposes/i.test(text) && /seconds/i.test(text)) return text.replace(/For security purposes, you can only request this after/i, '请求太频繁了，请等待').replace(/seconds?/i, '秒后再试');
   return text || '登录失败，请检查 Supabase 登录配置和账号密码。';
 }
 
