@@ -1,26 +1,29 @@
-# YayaMind Deployment Notes
+# YayaMind 部署说明
 
-## Current Goal
+## 当前目标
 
-YayaMind needs two deployment modes:
+YayaMind 现在分成两种使用方式：
 
-- Portfolio preview: interviewers can open a public URL and understand the product.
-- Real personal use: the user can open a web URL and write persistent personal data.
+- **作品集预览版**：面试官打开公开网址，可以看到产品界面和核心体验。
+- **真实云端可用版**：你打开同一个网址，先登录账号，然后录入日程、待办、提醒，数据保存到云端数据库。
 
-The current codebase is local-first. The React/Vite frontend calls `/api/*`, and the Fastify backend writes to `personal-assistant-data/`. That local data directory is intentionally ignored by Git.
+当前代码仍保留本地优先能力：本地开发时，React/Vite 前端调用 `/api/*`，Fastify 后端写入 `personal-assistant-data/`。这个本地数据目录已经被 `.gitignore` 忽略，不会上传到 GitHub。
 
-## What Can Be Deployed Now
+## 已经完成的代码能力
 
-The app can be deployed to Vercel as a portfolio preview.
+当前项目已经支持：
 
-Behavior:
+- Vercel 部署前端页面。
+- Vercel `/api/*` Serverless 后端。
+- Supabase 云端存储。
+- Supabase 邮箱 + 密码登录。
+- 退出账号和切换账号。
+- 按账号隔离数据：不同账号登录后看到不同数据。
+- 没配置 Supabase 时，线上继续展示演示数据，不会空白。
 
-- When the local backend is available, the app uses real local data.
-- When `/api/bootstrap` is unavailable, the app falls back to a read-only portfolio preview dataset.
-- The preview is enough for an interviewer to click around and understand the product shape.
-- The preview is not a replacement for real cloud storage.
+## Vercel 部署配置
 
-Vercel settings:
+Vercel 项目设置：
 
 ```text
 Framework Preset: Vite
@@ -29,49 +32,55 @@ Build Command: npm run build
 Output Directory: dist
 ```
 
-## GitHub Setup
+当前公开网址：
 
-Create an empty GitHub repository, then connect this local project:
-
-```powershell
-git init
-git add .
-git commit -m "Initial YayaMind MVP"
-git branch -M main
-git remote add origin https://github.com/<your-name>/<repo-name>.git
-git push -u origin main
+```text
+https://yayamind.vercel.app/
 ```
 
-Do not commit:
+## GitHub 状态
+
+GitHub 仓库：
+
+```text
+https://github.com/goshi-c/yayamind
+```
+
+不要提交这些内容：
 
 - `.env`
 - `.env.local`
 - `personal-assistant-data/`
 - `node_modules/`
 - `dist/`
+- `*.log`
 
-These are already covered by `.gitignore`.
+这些已经写在 `.gitignore` 里。
 
-## Real Personal Use
+## 必须手动做的事
 
-Opening a Vercel frontend alone is not enough for real use, because Vercel's static frontend cannot write to `personal-assistant-data/` on the user's computer.
+下面这些步骤涉及你的 Supabase 账号和私钥，需要你自己在网页后台操作。我已经把代码接好了，但不能替你拿 `service_role key`。
 
-YayaMind now supports a first cloud-backed mode:
+## 第 1 步：创建 Supabase 项目
+
+1. 打开 Supabase。
+2. 新建一个 Project。
+3. 项目名可以叫：
 
 ```text
-Vercel frontend
-+ Vercel /api serverless functions
-+ Supabase storage table
-+ optional DeepSeek API key
+yayamind
 ```
 
-In this mode, the same `/api/*` routes run on Vercel. Local development still writes to `personal-assistant-data/`; production writes to Supabase when the environment variables below are set.
+4. 选择数据库地区时，离你近一点即可，例如新加坡、日本、美国都可以。
+5. 等项目创建完成。
 
-### Supabase Setup
+## 第 2 步：创建数据表
 
-Create a Supabase project. This part must be done in the user's own Supabase account because it creates private database credentials.
+进入 Supabase 项目后：
 
-Then run this SQL in the Supabase SQL editor:
+1. 打开左侧 `SQL Editor`。
+2. 新建 Query。
+3. 粘贴并运行下面这段 SQL：
 
 ```sql
 create table if not exists public.yayamind_store (
@@ -81,72 +90,179 @@ create table if not exists public.yayamind_store (
 );
 ```
 
-### Supabase Auth Setup
-
-YayaMind uses Supabase email/password auth.
-
-In Supabase:
-
-1. Go to `Authentication` -> `Providers`.
-2. Enable `Email`.
-3. For the easiest first deployment, turn off email confirmation:
-   - `Authentication` -> `Sign In / Providers` -> `Email`
-   - Disable `Confirm email`
-4. If email confirmation stays enabled, the first registered account must confirm email before login works.
-
-Each account gets its own data namespace in `yayamind_store`, so logging out and logging into another account switches to another dataset.
-
-### Vercel Environment Variables
-
-Add these backend variables in Vercel:
+这个表会保存 YayaMind 的云端数据。代码会自动按账号隔离，例如：
 
 ```text
-SUPABASE_URL=https://<your-project-ref>.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=<your Supabase service_role key>
+用户A/events.jsonl
+用户A/tasks.jsonl
+用户B/events.jsonl
+用户B/tasks.jsonl
+```
+
+你不需要手动往表里插入数据。
+
+## 第 3 步：开启邮箱密码登录
+
+在 Supabase 项目里：
+
+1. 打开左侧 `Authentication`。
+2. 找到 `Providers`。
+3. 确认 `Email` 已开启。
+4. 为了第一次部署最省事，建议先关闭邮箱验证：
+
+```text
+Authentication -> Sign In / Providers -> Email -> Confirm email
+```
+
+把 `Confirm email` 关掉。
+
+如果你保留邮箱验证，第一次注册后必须去邮箱点确认链接，否则无法登录。
+
+## 第 4 步：找到 Supabase 环境变量
+
+在 Supabase 项目里打开：
+
+```text
+Project Settings -> API
+```
+
+你需要复制这些值：
+
+```text
+Project URL
+anon public key
+service_role key
+```
+
+注意：
+
+- `anon public key` 可以给前端用。
+- `service_role key` 是私钥，只能放到 Vercel 环境变量里，不能写进前端代码，不能公开发给别人。
+
+## 第 5 步：配置 Vercel 环境变量
+
+进入 Vercel：
+
+```text
+Project -> yayamind -> Settings -> Environment Variables
+```
+
+添加下面 5 个变量。
+
+后端变量：
+
+```text
+SUPABASE_URL=你的 Project URL
+SUPABASE_SERVICE_ROLE_KEY=你的 service_role key
 SUPABASE_YAYAMIND_TABLE=yayamind_store
 ```
 
-Add these frontend variables in Vercel:
+前端变量：
 
 ```text
-VITE_SUPABASE_URL=https://<your-project-ref>.supabase.co
-VITE_SUPABASE_ANON_KEY=<your Supabase anon public key>
+VITE_SUPABASE_URL=你的 Project URL
+VITE_SUPABASE_ANON_KEY=你的 anon public key
 ```
 
-Optional AI variables:
+如果你想让线上也使用 DeepSeek，再加：
 
 ```text
-DEEPSEEK_API_KEY=<your DeepSeek key>
+DEEPSEEK_API_KEY=你的 DeepSeek key
 DEEPSEEK_MODEL=deepseek-chat
 ```
 
-Important:
+## 第 6 步：重新部署 Vercel
 
-- Use `service_role` only in Vercel environment variables, never in frontend code.
-- Only the public anon key should use `VITE_`.
-- After changing environment variables, redeploy the Vercel project.
+环境变量添加后，需要重新部署。
 
-### Current Cloud Scope
+在 Vercel：
 
-This is an account-based cloud mode.
+```text
+Deployments -> 选择最新一次部署 -> Redeploy
+```
 
-Behavior:
+重新部署完成后，打开：
 
-- If Supabase env vars are not configured, the public Vercel URL shows demo data.
-- If Supabase env vars are configured, the public Vercel URL shows a login/register screen.
-- Logged-in users can write their own cloud data.
-- The sidebar has a logout button for switching accounts.
+```text
+https://yayamind.vercel.app/
+```
 
-Next production step:
+预期结果：
 
-- Later split the single storage table into normalized event/task/reminder tables if multi-user use becomes important.
+- 页面先显示登录 / 注册。
+- 第一次使用时点“第一次用，创建账号”。
+- 注册后进入 YayaMind。
+- 之后录入的数据会保存到 Supabase。
+- 点左侧“退出”可以退出账号。
+- 换另一个账号登录，会看到另一套数据。
 
-## Recommended Roadmap
+## 如何判断是否配置成功
 
-1. Deploy the current portfolio preview to Vercel.
-2. Use the public URL for interviews and portfolio sharing.
-3. Enable Supabase Email Auth.
-4. Add Supabase environment variables in Vercel.
-4. Redeploy and test `/api/bootstrap`.
-5. Register the first account from the YayaMind login page.
-6. Keep the local-first version as a private mode for Obsidian/file-based workflows.
+配置成功后：
+
+1. 打开 `https://yayamind.vercel.app/`。
+2. 能看到登录页。
+3. 注册或登录后进入主界面。
+4. 新增一个待办或日程。
+5. 刷新页面后，这条数据仍然存在。
+6. 去 Supabase 的 `Table Editor` 查看 `yayamind_store`，应该能看到对应数据行。
+
+## 当前云端版本的边界
+
+当前是“可真实使用的第一版云端模式”，不是完整商业化多用户系统。
+
+已经有：
+
+- 登录。
+- 注册。
+- 退出。
+- 切换账号。
+- 每个账号独立数据。
+- 云端持久化。
+
+暂时还没有：
+
+- 找回密码页面。
+- 邮箱验证后的完整引导。
+- 用户资料页。
+- 管理后台。
+- 精细化数据库表结构。
+- 多设备冲突合并。
+
+这些可以后续继续迭代。
+
+## 常见问题
+
+### 1. 为什么没配置 Supabase 前还是演示数据？
+
+因为 Vercel 静态网页本身不能保存你的真实数据。没有 Supabase 环境变量时，后端不会写临时文件，前端会继续展示演示数据。
+
+### 2. 为什么要 `service_role key`？
+
+后端需要用它读写 Supabase 表。它只存在 Vercel 的服务端环境变量里，不会打包进前端。
+
+### 3. 为什么还需要 `anon public key`？
+
+前端登录 / 注册需要用 Supabase 的公开 anon key。这个 key 可以放到 `VITE_SUPABASE_ANON_KEY`。
+
+### 4. 能不能让别人也用？
+
+可以。别人注册自己的账号后，会有自己的数据空间。
+
+但如果要正式开放给很多人，后续最好继续加：
+
+- 找回密码。
+- 邮箱验证。
+- 使用条款。
+- 数据删除。
+- 更细的数据库权限策略。
+
+### 5. 本地版本还能用吗？
+
+可以。本地不配置 Supabase 时，仍然使用：
+
+```text
+personal-assistant-data/
+```
+
+也就是你原来的本地文件模式。
