@@ -538,6 +538,10 @@ export function App() {
   useEffect(() => {
     if (authRequired && !authSession) return;
     refreshData().catch(() => {
+      if (authRequired) {
+        logout();
+        return;
+      }
       setData(portfolioPreviewData);
     });
   }, [authRequired, authSession?.access_token]);

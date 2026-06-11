@@ -191,7 +191,9 @@ export async function startLocalServer() {
   await app.listen({ port: 8787, host: '127.0.0.1' });
 }
 
-if (process.env.VERCEL !== '1') {
+const isDirectLocalRun = process.argv[1]?.replace(/\\/g, '/').endsWith('/server/index.ts') ?? false;
+
+if (isDirectLocalRun) {
   startLocalServer().catch((error) => {
     console.error(error);
     process.exitCode = 1;
