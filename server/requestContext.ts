@@ -5,15 +5,17 @@ type RequestContext = {
 };
 
 const requestContext = new AsyncLocalStorage<RequestContext>();
+let fallbackUserId: string | null = null;
 
 export function runWithRequestContext<T>(context: RequestContext, callback: () => T) {
   return requestContext.run(context, callback);
 }
 
 export function enterRequestContext(context: RequestContext) {
+  fallbackUserId = context.userId;
   requestContext.enterWith(context);
 }
 
 export function getRequestUserId() {
-  return requestContext.getStore()?.userId ?? null;
+  return requestContext.getStore()?.userId ?? fallbackUserId;
 }
