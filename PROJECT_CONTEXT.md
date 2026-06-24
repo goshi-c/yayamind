@@ -14,19 +14,20 @@ Codex 接手项目时，优先读：
 
 ## 当前项目状态
 
-- 当前版本：AI 化 1.0。
-- 当前阶段：AI 化 1.0 小猫追问上下文、实时转写、周期待办和多项补充去重已返工，并通过开发态回放、打包态和真实入口冷启动验证。
+- 当前版本：1.1 Schedule-only。
+- 当前阶段：1.0 已冻结并推送到 GitHub tag `v1.0-ai-assistant`；1.1 正在从 1.0 基线删除当前版本待办能力，只保留日程安排、提醒、画像和周期日程。
 - 当前开发入口：`npm run dev` 或 `npm run desktop:dev`。
 - 当前正式入口：阶段收口同步后的 `D:\YayaMind\YayaMind.exe`。
-- 最近完成：2026-06-24 三次修复追问上下文混乱：同一句补充信息可同时填充面试、改项目、健身等多个草稿项，问题只针对仍缺字段生成；后续听写实时转写继续显示；无明确时间的周期规则会动态生成日常待办。
+- 最近完成：2026-06-24 完成 1.1 schedule-only：冻结并 push 1.0，删除待办导航、待办页面、右侧待办区和待办 API，后端不再读取展示或写入待办，并已同步真实入口。
 - 文件定位：`FILE_INDEX.md` 已作为文件定位字典，用于快速定位代码、数据、日志、资源和目录；历史上下文、决策、验证结果和旧链路仍写入 `PROJECT_CONTEXT.md`。
-- 最近风险：1.0 当前是规则型可运行闭环，不是完整大模型规划引擎；MVP 真实桌面语音人工验收项仍是历史遗留风险。
-- 下一步重点：在真实使用中继续收集复杂自然语言 badcase，并谨慎扩展 AI 规划能力。
+- 最近风险：旧 `tasks.jsonl` / `todo_projects.json` 数据文件仍保留在用户数据目录，但 1.1 不读取展示；如需恢复待办能力，从 GitHub tag `v1.0-ai-assistant` 拉取。
+- 下一步重点：真实入口人工验收左侧导航、右侧详情和小猫语音日程化表现。
 
 ## 上下文索引
 
 | 编号 | 日期 | 主题 | 关键词 |
 |---|---|---|---|
+| CTX-20260624-004 | 2026-06-24 | 1.0 冻结与 1.1 删除待办 | v1.0 tag, schedule-only, remove todo, GitHub |
 | CTX-20260624-003 | 2026-06-24 | 多项补充追问去重与 PRD/SDD 同步 | multi supplement, modifyPlanDraft, repeated question, PRD, SDD |
 | CTX-20260624-002 | 2026-06-24 | 追问上下文、实时转写和周期待办二次返工 | pendingClarification, supplement, recurring task, real entry |
 | CTX-20260624-001 | 2026-06-24 | 桌面小猫追问对话历史保留 | cat dialog history, clarification, listening, real entry |
@@ -1453,3 +1454,43 @@ MVP 已完成最终收口审计，根目录 `PRD.md` / `SDD.md` / `TODO.md` 仍�
 ### 当前边界和风险
 
 - 本轮已完成 source、build output、真实入口同步和冷启动 API 验证；真实麦克风听写和悬浮窗视觉仍建议用户用截图里的原句肉眼验收一次。
+
+## CTX-20260624-004：1.0 冻结与 1.1 删除待办
+
+### 背景
+
+用户决定 1.1 不再“冻结隐藏”待办，而是在确认 GitHub 可以保存版本后，直接从当前版本删除待办功能，减少后续代码阅读和维护成本。1.0 作为带待办能力的基线保存在 GitHub，需要时可从 tag 恢复。
+
+### 本轮做了什么
+
+- 将当前 AI 1.0 本地状态提交为 `chore: freeze AI 1.0 assistant`。
+- 创建并推送 Git tag `v1.0-ai-assistant`。
+- 创建分支 `codex/v1.1-schedule-only`。
+- 删除当前用户入口里的待办导航、项目待办页面、右侧详情待办区域和待办月历侧栏。
+- `server/index.ts` 移除当前版本 `/api/tasks` 与 `/api/todo-projects` 路由。
+- `server/dataStore.ts` 的 bootstrap 不再返回实际待办和待办项目；日历 day tasks 为空。
+- `server/dataStore.ts` 将 `add_task` 解析结果转成日程或待补充日程草稿。
+- 复杂草稿不再创建 task 草稿项；草稿确认不再写 `tasks.jsonl`。
+- 无时间周期习惯不再生成周期待办，改为追问具体时间。
+- 根目录文档切换为 1.1 schedule-only：`PRD.md`、`SDD.md`、`TODO.md`、`FILE_INDEX.md`、`README.md`、`AI_1.1_TEST_CASES.md`。
+
+### 验证状态
+
+- `npm run build` 已通过一次。
+- 临时数据目录 `.run-logs/v11-schedule-only-data` 回放：“写简历”返回时间追问，不写待办。
+- 回放：“下午三点写简历”写入 `events.jsonl`。
+- 回放：“每天给猫刷牙”只追问一次“给猫刷牙什么时间？”。
+- 回放 bootstrap：`tasks=0`、`todoProjects=0`、calendar tasks 总数为 0。
+
+### 最终验证
+
+- 最终 `npm run build` 通过。
+- `npm run desktop:pack` 通过，输出 `D:\YayaMindBuild\release\win-unpacked`。
+- 已同步到真实入口 `D:\YayaMind`；`ROBOCOPY_EXIT=3`，未返回失败码。
+- 已冷启动 `D:\YayaMind\YayaMind.exe`；`http://127.0.0.1:8787/api/bootstrap` 返回 200。
+- 真实入口 bootstrap 返回 `tasks=0`、`todoProjects=0`、calendar tasks 总数为 0。
+
+### 后续
+
+- commit/tag/push 1.1。
+- 用户在真实入口人工确认左侧导航无“待办”、右侧详情无“待办”框、小猫输入“写简历”会追问时间。

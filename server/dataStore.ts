@@ -78,13 +78,11 @@ export async function ensureDataFiles() {
 
 export async function getBootstrapData() {
   await ensureDataFiles();
-  const [events, tasks, workLogs, storedReminders, goals, todoProjects, profile, settings, planDrafts, conversation, recurringRules] = await Promise.all([
+  const [events, workLogs, storedReminders, goals, profile, settings, planDrafts, conversation, recurringRules] = await Promise.all([
     readJsonl<EventRecord>(files.events),
-    readJsonl<TaskRecord>(files.tasks),
     readJsonl<WorkLogRecord>(files.workLogs),
     readJsonl<ReminderRecord>(files.reminders),
     readGoals(),
-    readTodoProjects(),
     readProfile(),
     readSettings(),
     readPlanDrafts(),
@@ -130,19 +128,6 @@ export async function getBootstrapData() {
             time: event.startAt ? formatTime(event.startAt) : undefined,
             type: event.type
           })),
-        ...tasks
-          .filter((task) => task.status === 'todo' && task.title.trim() && task.dueAt?.startsWith(today) && hasTimedTodoDeadline(task))
-          .map((task) => ({
-            id: task.id,
-            title: task.title,
-            type: 'task',
-            dueAt: task.dueAt,
-            estimatedMinutes: task.estimatedMinutes,
-            preparations: task.preparations ?? [],
-            notes: task.notes ?? task.description,
-            rawText: task.rawText
-          })),
-        ...buildRecurringTasksForDate(recurringRules, today)
       ],
       timeline: todayTimeline.sort((a, b) => a.time.localeCompare(b.time)),
       reminders: reminders
@@ -158,14 +143,14 @@ export async function getBootstrapData() {
         })),
       weatherAlerts: weatherAlerts.filter((alert) => alert.date === today)
     },
-    calendar: buildCalendar(events, tasks, todoProjects, reminders, workLogs, weatherAlerts, planDrafts, recurringRules),
-    todoProjects: buildVisibleTodoProjects(todoProjects, tasks),
-    tasks: buildTaskList(tasks, todoProjects),
+    calendar: buildCalendar(events, [], [], reminders, workLogs, weatherAlerts, planDrafts, recurringRules),
+    todoProjects: [],
+    tasks: [],
     goals,
-    profile: buildProfileSnapshot(profile, workLogs, tasks),
+    profile: buildProfileSnapshot(profile, workLogs, []),
     planDrafts: planDrafts.filter((draft) => draft.status === 'draft'),
     conversation,
-    titleLexicon: buildTitleLexicon(events, tasks, reminders, todoProjects),
+    titleLexicon: buildTitleLexicon(events, [], reminders, []),
     recurringRules: recurringRules.filter((rule) => rule.status === 'active'),
     settings
   };
@@ -506,34 +491,48 @@ export function parseTextInput(text: string, now = new Date().toISOString()): Pa
   };
 
   if (isExplicitTodoText(rawText)) {
-    const todoNotes = inferTodoNote(rawText) ?? notes;
     return withPreview({
       ...base,
-      intent: 'add_task',
-      confidence: 0.9,
+      intent: 'add_event',
+      confidence: 0.76,
+      needsConfirmation: !timeInfo.startAt,
       fields: {
         title: cleanupTaskTitle(rawText),
-        dueAt: inferDueAt(rawText, now),
+        type: inferEventType(rawText),
+        date: timeInfo.date,
+        startAt: timeInfo.startAt,
+        endAt: timeInfo.endAt,
+        purpose,
         estimatedMinutes,
         preparations,
-        notes: todoNotes
-      }
+        notes: inferTodoNote(rawText) ?? notes
+      },
+      questions: timeInfo.startAt ? [] : ['1.1 先只保留日程安排。这个安排要放到几点？'],
+      warnings: timeInfo.startAt ? [] : ['时间不明确'],
+      preview: timeInfo.startAt ? {} : { options: [{ id: 'save-pending', title: '先放待补充' }] }
     });
   }
 
   if (isLifeTodoReminderText(rawText)) {
     return withPreview({
       ...base,
-      intent: 'add_task',
-      confidence: 0.86,
+      intent: 'add_event',
+      confidence: 0.74,
+      needsConfirmation: !timeInfo.startAt,
       fields: {
         title: cleanupTaskTitle(rawText),
-        dueAt: inferDueAt(rawText, now),
-        projectTitle: '生活',
+        type: inferEventType(rawText),
+        date: timeInfo.date,
+        startAt: timeInfo.startAt,
+        endAt: timeInfo.endAt,
+        purpose,
         estimatedMinutes,
         preparations,
         notes: inferTodoNote(rawText) ?? notes
-      }
+      },
+      questions: timeInfo.startAt ? [] : ['这个生活安排要放到几点？'],
+      warnings: timeInfo.startAt ? [] : ['时间不明确'],
+      preview: timeInfo.startAt ? {} : { options: [{ id: 'save-pending', title: '先放待补充' }] }
     });
   }
 
@@ -619,15 +618,23 @@ export function parseTextInput(text: string, now = new Date().toISOString()): Pa
 
   return withPreview({
     ...base,
-    intent: 'add_task',
+    intent: 'add_event',
     confidence: 0.72,
+    needsConfirmation: true,
     fields: {
-      title: cleanupTaskTitle(rawText),
-      dueAt: inferDueAt(rawText, now),
+      title: cleanupEventTitle(rawText),
+      type: inferEventType(rawText),
+      date: timeInfo.date,
+      startAt: timeInfo.startAt,
+      endAt: timeInfo.endAt,
+      purpose,
       estimatedMinutes,
       preparations,
       notes
-    }
+    },
+    questions: ['这个安排要放到几点？'],
+    warnings: ['时间不明确'],
+    preview: { options: [{ id: 'save-pending', title: '先放待补充' }] }
   });
 }
 
@@ -776,22 +783,26 @@ export async function parseAndEnrichTextInput(text: string, now = new Date().toI
 
   if (!hasSupplementText && isHabitRuleText(oneDotZeroText)) {
     const draft = await createOrReplacePlanDraft(oneDotZeroText, now, { habitOnly: true });
+    const draftQuestion = buildPlanDraftQuestion(draft);
+    const options = draftQuestion
+      ? buildPlanDraftOptions(draft, true)
+      : [
+          { id: `confirm-draft:${draft.id}`, title: '确认规则' },
+          { id: `cancel-draft:${draft.id}`, title: '全部取消' }
+        ];
     return attach(withPreview({
       intent: 'habit_rule',
       confidence: 0.82,
       needsConfirmation: true,
       rawText: oneDotZeroText,
       fields: { title: draft.items[0]?.title ?? '周期安排', draftId: draft.id },
-      questions: ['这是周期安排，我会先生成规则和近期实例草稿，确认后写入。'],
+      questions: [draftQuestion ?? '这是周期安排，我会先生成规则和近期日程草稿，确认后写入。'],
       warnings: draft.warnings,
       preview: {
         title: '习惯 / 周期草稿',
         draft,
         parser: draft.items.some((item) => item.source === 'profile_inferred') ? 'deepseek' : undefined,
-        options: [
-          { id: `confirm-draft:${draft.id}`, title: '确认规则' },
-          { id: `cancel-draft:${draft.id}`, title: '全部取消' }
-        ]
+        options
       },
       conversationState: 'awaiting_confirmation',
       draft,
@@ -832,7 +843,7 @@ export async function parseAndEnrichTextInput(text: string, now = new Date().toI
 
 export async function enrichParseResult(result: ParseResult): Promise<ParseResult> {
   if (result.intent === 'add_task') {
-    return enrichTaskParseResult(result);
+    return convertTaskParseToScheduleOnlyEvent(result);
   }
 
   if (result.intent !== 'add_event' || typeof result.fields.startAt !== 'string' || typeof result.fields.endAt !== 'string') {
@@ -863,6 +874,30 @@ export async function enrichParseResult(result: ParseResult): Promise<ParseResul
       options: conflictResult.options
     }
   };
+}
+
+function convertTaskParseToScheduleOnlyEvent(result: ParseResult): ParseResult {
+  const dueAt = typeof result.fields.dueAt === 'string' ? result.fields.dueAt : undefined;
+  const title = typeof result.fields.title === 'string' ? result.fields.title : cleanupEventTitle(result.rawText);
+  return withPreview({
+    ...result,
+    intent: 'add_event',
+    confidence: Math.min(result.confidence, 0.78),
+    needsConfirmation: !dueAt,
+    fields: {
+      ...result.fields,
+      title,
+      type: inferEventType(`${result.rawText} ${title}`),
+      date: dueAt?.slice(0, 10) ?? inferDate(result.rawText, new Date().toISOString()),
+      startAt: dueAt,
+      endAt: dueAt ? addMinutesToIso(dueAt, typeof result.fields.estimatedMinutes === 'number' ? result.fields.estimatedMinutes : 60) : undefined,
+      purpose: summarizePurposeText(typeof result.fields.notes === 'string' ? result.fields.notes : result.rawText),
+      dueAt: undefined
+    },
+    questions: dueAt ? [] : ['1.1 已移除待办，这件事要安排到几点？'],
+    warnings: dueAt ? result.warnings : Array.from(new Set([...result.warnings, '时间不明确'])),
+    preview: dueAt ? result.preview : { ...result.preview, options: [{ id: 'save-pending', title: '先放待补充' }] }
+  });
 }
 
 async function appendEventFromParse(
@@ -994,13 +1029,11 @@ async function buildPlanDraft(text: string, now: string, options: { habitOnly?: 
 }
 
 async function buildPlanDraftItems(text: string, baseDate: string, now: string): Promise<PlanDraftItem[]> {
-  const [events, tasks, reminders, projects] = await Promise.all([
+  const [events, reminders] = await Promise.all([
     readJsonl<EventRecord>(files.events),
-    readJsonl<TaskRecord>(files.tasks),
-    readJsonl<ReminderRecord>(files.reminders),
-    readTodoProjects()
+    readJsonl<ReminderRecord>(files.reminders)
   ]);
-  const lexicon = buildTitleLexicon(events, tasks, reminders, projects);
+  const lexicon = buildTitleLexicon(events, [], reminders, []);
   const segments = splitPlanSegments(text);
   const items: PlanDraftItem[] = [];
 
@@ -1026,19 +1059,6 @@ async function buildPlanDraftItems(text: string, baseDate: string, now: string):
         confidence: timeInfo.startAt ? 0.86 : 0.62,
         risk: timeInfo.startAt ? undefined : '提醒时间不明确'
       });
-    } else if (/(待办|任务|写|整理|准备)/.test(segment) && !hasExplicitTimeText(segment) && !inferred && !hasPlanTimeAnchor(segment)) {
-      items.push({
-        id: createId('draft_item'),
-        kind: 'task',
-        title: normalizedTitle,
-        targetDate: baseDate,
-        dueAt: startAt,
-        projectId: inferDraftProjectId(segment, projects),
-        notes: summarizePurposeText(segment),
-        source: inferred ? 'default_assumption' : 'user_explicit',
-        confidence: 0.76,
-        risk: needsTimeClarification ? '时间不明确' : undefined
-      });
     } else {
       items.push({
         id: createId('draft_item'),
@@ -1047,7 +1067,6 @@ async function buildPlanDraftItems(text: string, baseDate: string, now: string):
         targetDate: timeInfo.date ?? baseDate,
         startAt,
         endAt,
-        projectId: inferDraftProjectId(segment, projects),
         notes: summarizePurposeText(segment),
         source: timeInfo.startAt ? 'user_explicit' : inferred ? 'default_assumption' : 'lexicon_normalized',
         confidence: timeInfo.startAt ? 0.86 : 0.68,
@@ -1068,9 +1087,9 @@ function needsDraftTimeClarification(segment: string) {
 }
 
 function buildPlanDraftQuestion(draft: PlanDraft) {
-  const unclearItems = draft.items.filter((item) => item.risk?.includes('时间不明确') || ((item.kind === 'event' || item.kind === 'task') && !item.startAt && !item.dueAt));
+  const unclearItems = draft.items.filter((item) => item.risk?.includes('时间不明确') || ((item.kind === 'event' || item.kind === 'task' || item.kind === 'habit_rule') && !item.startAt && !item.dueAt));
   if (unclearItems.length === 0) return null;
-  return unclearItems.map((item) => buildDirectTimeQuestion(item.title)).slice(0, 3).join('\n');
+  return Array.from(new Set(unclearItems.map((item) => buildDirectTimeQuestion(item.title)))).slice(0, 3).join('\n');
 }
 
 function buildDirectTimeQuestion(title: string) {
@@ -1117,15 +1136,15 @@ async function buildHabitDraftItems(text: string, baseDate: string, now: string)
     },
     ...nextOccurrences.slice(0, 3).map((occurrence) => ({
       id: createId('draft_item'),
-      kind: hasExplicitTimeText(text) ? 'event' as const : 'task' as const,
+      kind: 'event' as const,
       title: habit.title,
       targetDate: occurrence.slice(0, 10),
       startAt: hasExplicitTimeText(text) ? occurrence : undefined,
       endAt: hasExplicitTimeText(text) ? addMinutesToIso(occurrence, habit.durationMinutes) : undefined,
-      dueAt: hasExplicitTimeText(text) ? undefined : occurrence,
       notes: habit.notes,
       source: aiResult?.warnings?.includes('ai_used') ? 'profile_inferred' as const : 'system_generated' as const,
-      confidence: 0.78
+      confidence: 0.78,
+      risk: hasExplicitTimeText(text) ? undefined : '时间不明确'
     }))
   ];
 }
@@ -1167,28 +1186,28 @@ async function confirmPlanDraft(draftId: string, source: SourceType, now: string
     }
 
     if (item.kind === 'task') {
-      const task: TaskRecord = {
-        id: createId('task'),
+      const startAt = item.dueAt ?? item.startAt;
+      const event: EventRecord = {
+        id: createId('event'),
+        type: inferEventType(item.title),
         title: item.title,
-        description: '',
-        status: 'todo',
-        priority: 'medium',
-        dueAt: item.dueAt ?? null,
-        estimatedMinutes: null,
+        date: startAt?.slice(0, 10) ?? item.targetDate ?? draft.date,
+        startAt,
+        endAt: startAt ? addMinutesToIso(startAt, 60) : undefined,
+        purpose: summarizePurposeText(item.notes ?? item.title),
         preparations: [],
-        notes: item.notes,
-        actualMinutes: 0,
-        linkedEventIds: [],
-        goalId: null,
-        projectId: item.projectId ?? null,
+        notes: summarizePurposeText(item.notes ?? item.title),
+        reminderIds: [],
+        status: 'scheduled',
+        linkedTaskId: null,
         tags: item.source === 'profile_inferred' ? ['profile_inferred'] : [],
         source,
         rawText: draft.sourceText,
         createdAt: now,
         updatedAt: now
       };
-      await appendJsonl(files.tasks, task);
-      written.push({ file: 'tasks.jsonl', id: task.id });
+      await appendJsonl(files.events, event);
+      written.push({ file: 'events.jsonl', id: event.id });
     }
 
     if (item.kind === 'reminder') {
@@ -1217,7 +1236,7 @@ async function confirmPlanDraft(draftId: string, source: SourceType, now: string
         title: habit.title,
         frequency: /每周|每星期/.test(draft.sourceText) ? 'weekly' : /每天|每日|每晚|每早/.test(draft.sourceText) ? 'daily' : 'custom',
         timeHint: localTimeTextFromIso(habit.startAt),
-        targetKind: hasExplicitTimeText(draft.sourceText) ? 'event' : 'task',
+        targetKind: 'event',
         nextOccurrences: getNextOccurrences(draft.sourceText, draft.date, habit.startAt),
         status: 'active',
         source,
@@ -1248,7 +1267,7 @@ async function confirmPlanDraft(draftId: string, source: SourceType, now: string
       conversationState: 'completed',
       draft
     } satisfies ParseResult,
-    feedback: `已确认 ${written.length} 项，正式写入日程 / 待办 / 提醒 / 周期规则。`,
+    feedback: `已确认 ${written.length} 项，正式写入日程 / 提醒 / 周期规则。`,
     written
   };
 }
@@ -2674,7 +2693,8 @@ function buildCalendar(
   planDrafts: PlanDraft[] = [],
   recurringRules: RecurringRuleRecord[] = []
 ) {
-  const projectById = new Map(todoProjects.map((project) => [project.id, project.title]));
+  void tasks;
+  void todoProjects;
   const draftItems = planDrafts
     .filter((draft) => draft.status === 'draft')
     .flatMap((draft) => draft.items.map((item) => ({ ...item, draftId: draft.id })));
@@ -2689,10 +2709,7 @@ function buildCalendar(
   const weekEndText = toLocalDateText(weekEnd);
   const futureDates = Array.from(
     new Set([
-      ...events.filter((event) => event.status === 'scheduled' && event.date > weekEndText).map((event) => event.date),
-      ...tasks
-        .filter((task) => task.status === 'todo' && task.title.trim() && task.dueAt && task.dueAt.slice(0, 10) > weekEndText)
-        .map((task) => task.dueAt!.slice(0, 10))
+      ...events.filter((event) => event.status === 'scheduled' && event.date > weekEndText).map((event) => event.date)
     ])
   )
     .sort()
@@ -2718,37 +2735,7 @@ function buildCalendar(
           .filter((item) => item.kind === 'event' && item.targetDate === isoDate && (!item.startAt || !item.endAt))
           .map((item) => ({ ...toCalendarEventItem(draftItemToEventRecord(item, isoDate)), isDraft: true, draftId: item.draftId }))
       ],
-      tasks: [
-        ...tasks
-        .filter((task) => task.status === 'todo' && task.title.trim() && task.dueAt?.startsWith(isoDate))
-        .map((task) => ({
-          id: task.id,
-          title: task.title,
-          type: 'task',
-          projectTitle: task.projectId ? projectById.get(task.projectId) ?? '未归类' : '未归类',
-          dueAt: task.dueAt,
-          estimatedMinutes: task.estimatedMinutes,
-          preparations: task.preparations ?? [],
-          notes: task.notes ?? task.description,
-          rawText: task.rawText
-        })),
-        ...buildRecurringTasksForDate(recurringRules, isoDate),
-        ...draftItems
-          .filter((item) => item.kind === 'task' && (item.dueAt?.startsWith(isoDate) || item.targetDate === isoDate))
-          .map((item) => ({
-            id: item.id,
-            title: item.title,
-            type: 'task',
-            projectTitle: item.projectId ? projectById.get(item.projectId) ?? '未归类' : '未归类',
-            dueAt: item.dueAt ?? null,
-            estimatedMinutes: null,
-            preparations: [],
-            notes: item.notes,
-            rawText: item.title,
-            isDraft: true,
-            draftId: item.draftId
-          }))
-      ],
+      tasks: [],
       reminders: (reminders
         .filter((reminder) => ['pending', 'triggered', 'missed'].includes(reminder.status))
         .filter((reminder) => reminder.remindAt.startsWith(isoDate) || reminder.updatedAt.startsWith(isoDate))
@@ -2840,7 +2827,7 @@ function buildRecurringTasksForDate(rules: RecurringRuleRecord[], isoDate: strin
       dueAt: `${isoDate}T23:59:00+08:00`,
       estimatedMinutes: null,
       preparations: [],
-      notes: '周期待办',
+      notes: '周期日程',
       rawText: rule.rawText,
       isRecurring: true
     }));
@@ -3856,7 +3843,7 @@ function buildFeedback(result: ParseResult, resolvedBy?: string) {
 
   const messages: Record<string, string> = {
     add_event: '小猫已记录：安排放进一周安排了，右侧可以看完整详情。',
-    add_task: '小猫已记录：任务先放好，准备事项和备注也一起收下了。',
+    add_task: '小猫已记录：这件事会先转成日程安排。',
     start_work: '开工记录好了，我会陪你把这段执行脚印留下来。',
     pause_work: '暂停记下来了，先缓一口气也算照顾计划。',
     resume_work: '继续记录好了，节奏接回来了。',

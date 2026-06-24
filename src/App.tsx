@@ -388,7 +388,7 @@ type PostCommitAction = {
   endAt?: string;
 };
 
-type ViewMode = 'week' | 'todos' | 'goals' | 'profile' | 'summary' | 'settings';
+type ViewMode = 'week' | 'goals' | 'profile' | 'summary' | 'settings';
 
 type TodoContextMenu =
   | { kind: 'task'; task: TaskListItem; x: number; y: number }
@@ -614,7 +614,7 @@ function createPortfolioPreviewData(): AssistantData {
         id: 'demo-log-1',
         at: isoAt(index, '18:20'),
         time: '18:20',
-        text: '完成一轮项目待办梳理，估时比预期多 20 分钟。',
+        text: '完成一轮日程梳理，估时比预期多 20 分钟。',
         action: 'progress',
         feedbackType: 'progress'
       });
@@ -3311,16 +3311,8 @@ export function App() {
 
   return (
     <main
-      className={`app-shell ${draggedTodoTaskId || draggedTodoProjectId ? 'todo-dragging' : ''}`}
+      className="app-shell"
       style={{ gridTemplateColumns: `76px minmax(260px, 1fr) 8px minmax(240px, ${rightPanelWidth}px)` }}
-      onMouseDown={(event) => {
-        if (!activeNewTaskProjectId) return;
-        const target = event.target;
-        if (target instanceof HTMLElement && target.closest('.todo-task-form, .todo-add-task-button')) return;
-        window.setTimeout(() => {
-          void finishNewTodoTaskDraft(activeNewTaskProjectId);
-        }, 0);
-      }}
     >
       <aside className="sidebar">
         <div className="brand">
@@ -3329,7 +3321,6 @@ export function App() {
         <div className="nav-main">
           {[
             ['□', '一周', 'week'],
-            ['✓', '待办', 'todos'],
             ['✦', '习惯', 'goals'],
             ['♡', '画像', 'profile'],
             ['↺', '总结', 'summary']
@@ -3441,229 +3432,6 @@ export function App() {
           )}
             </div>
           </>
-        ) : null}
-
-        {viewMode === 'todos' ? (
-          <section className="workspace-view todo-view">
-            <header className="panel-header todo-toolbar">
-              <p className="eyebrow">项目待办</p>
-              <div className="todo-toolbar-actions">
-                <button className="todo-add-project" onClick={createBlankTodoProject}>
-                  <span>＋</span>
-                  新增项目
-                </button>
-              </div>
-            </header>
-            <div className="project-todo-list">
-              {visibleProjectTodoGroups.length ? (
-                visibleProjectTodoGroups.map((group) => (
-                  <section
-                    className={`project-todo-group ${todoDragReady?.kind === 'project' && todoDragReady.id === group.projectId ? 'todo-selected' : ''} ${todoContextMenu?.kind === 'project' && todoContextMenu.project.id === group.projectId ? 'todo-context-selected' : ''} ${draggedTodoProjectId === group.projectId ? 'todo-drag-source' : ''} ${todoDropPreview?.kind === 'project' && todoDropPreview.targetId === group.projectId ? `todo-drop-preview todo-drop-${todoDropPreview.position}` : ''} ${todoDropPreview?.kind === 'project-end' && todoDropPreview.targetId === group.projectId ? 'todo-project-end-preview' : ''}`}
-                    data-project-id={group.projectId}
-                    key={group.projectId}
-                    draggable={!isUncategorizedTodoProject(group.project)}
-                    style={{ '--project-color': group.color } as CSSProperties}
-                    onContextMenu={(event) => {
-                      event.preventDefault();
-                      if (event.target instanceof HTMLElement && event.target.closest('.project-todo-item, .todo-task-form, .todo-empty-start, button, input, textarea, select')) return;
-                      openTodoProjectContextMenu(event, group.project);
-                    }}
-                    onMouseDown={(event) => {
-                      if (event.target instanceof HTMLElement && event.target.closest('.project-todo-item, .todo-task-form, .todo-empty-start')) return;
-                      armTodoDrag(event, 'project', group.projectId);
-                    }}
-                    onMouseUp={disarmTodoDragIfIdle}
-                    onDragStart={(event) => startTodoProjectDrag(event, group.project)}
-                    onDragEnd={clearTodoDragState}
-                    onDragOver={(event) => {
-                      event.preventDefault();
-                      event.dataTransfer.dropEffect = 'move';
-                      if (draggedTodoTaskId) {
-                        setTodoDropPreview({ kind: 'project-end', targetId: group.projectId });
-                      } else if (draggedTodoProjectId && group.projectId !== draggedTodoProjectId) {
-                        setTodoDropPreview({ kind: 'project', targetId: group.projectId, position: getDropPosition(event) });
-                      }
-                    }}
-                    onDragLeave={(event) => {
-                      const nextTarget = event.relatedTarget;
-                      if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) return;
-                      setTodoDropPreview((current) => (current?.targetId === group.projectId ? null : current));
-                    }}
-                    onDrop={(event) => {
-                      event.preventDefault();
-                      setTodoDropPreview(null);
-                      const project = getDraggedTodoProject(event);
-                      if (project) {
-                        void moveTodoProjectRelative(project, group.project, getDropPosition(event));
-                        return;
-                      }
-                      const task = getDraggedTodoTask(event);
-                      if (task) void moveTodoTaskToProject(task, group.projectId);
-                    }}
-                  >
-                    <div className="project-todo-head">
-                      {editingProjectId === group.projectId ? (
-                        <input
-                          value={projectTitleDraft}
-                          onChange={(event) => setProjectTitleDraft(event.target.value)}
-                          autoFocus
-                          onBlur={() => {
-                            void saveTodoProjectTitle(group.projectId);
-                          }}
-                          onKeyDown={(event) => {
-                            if (event.key === 'Enter') void saveTodoProjectTitle(group.projectId, { focusNewTask: true });
-                          }}
-                        />
-                      ) : (
-                        <strong onDoubleClick={() => startEditTodoProject(group.project)}>{group.projectTitle}</strong>
-                      )}
-                      <button className="todo-add-task-button" type="button" title="新增待办" aria-label={`给${group.projectTitle}新增待办`} onClick={() => startNewTodoTask(group.projectId)}>
-                        ＋
-                      </button>
-                      <span>{group.openCount} / {group.tasks.length}</span>
-                    </div>
-                    {activeNewTaskProjectId === group.projectId ? (
-                    <div
-                      className="todo-task-form"
-                      onBlur={(event) => {
-                        const nextTarget = event.relatedTarget;
-                        if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) return;
-                        void finishNewTodoTaskDraft(group.projectId);
-                      }}
-                    >
-                      <input
-                        data-new-task-project={group.projectId}
-                        value={newTaskDraftByProject[group.projectId]?.title ?? ''}
-                        onChange={(event) => updateNewTodoTaskDraft(group.projectId, { title: event.target.value })}
-                        placeholder=""
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter') void createTodoTaskFromProject(group.projectId);
-                        }}
-                      />
-                      <input
-                        value={newTaskDraftByProject[group.projectId]?.notes ?? ''}
-                        onChange={(event) => updateNewTodoTaskDraft(group.projectId, { notes: event.target.value })}
-                        placeholder=""
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter') void createTodoTaskFromProject(group.projectId);
-                        }}
-                      />
-                    </div>
-                    ) : null}
-                    <div className="project-todo-items">
-                      {group.tasks.length === 0 && activeNewTaskProjectId !== group.projectId ? (
-                        <button className="todo-empty-start" onClick={() => startNewTodoTask(group.projectId)}>
-                          写第一条待办
-                        </button>
-                      ) : null}
-                      {group.tasks.map((task) => {
-                        const isDone = task.status === 'done';
-                        return (
-                          <article
-                            data-task-id={task.id}
-                            className={`project-todo-item ${isDone ? 'todo-done' : ''} ${todoDragReady?.kind === 'task' && todoDragReady.id === task.id ? 'todo-selected' : ''} ${todoContextMenu?.kind === 'task' && todoContextMenu.task.id === task.id ? 'todo-context-selected' : ''} ${draggedTodoTaskId === task.id ? 'todo-drag-source' : ''} ${todoDropPreview?.kind === 'task' && todoDropPreview.targetId === task.id ? `todo-task-drop-preview todo-drop-${todoDropPreview.position}` : ''}`}
-                            key={task.id}
-                            draggable
-                            onMouseDown={(event) => {
-                              event.stopPropagation();
-                              armTodoDrag(event, 'task', task.id);
-                            }}
-                            onMouseUp={disarmTodoDragIfIdle}
-                            onContextMenu={(event) => {
-                              openTodoTaskContextMenu(event, task);
-                            }}
-                            onDragStart={(event) => startTodoDrag(event, task)}
-                            onDragEnd={clearTodoDragState}
-                            onDragOver={(event) => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                              event.dataTransfer.dropEffect = 'move';
-                              if (draggedTodoTaskId && draggedTodoTaskId !== task.id) {
-                                const draggedTask = data.tasks.find((item) => item.id === draggedTodoTaskId);
-                                if (draggedTask && (draggedTask.projectId || 'uncategorized') === group.projectId) {
-                                  setTodoDropPreview({ kind: 'task', targetId: task.id, position: getDropPosition(event) });
-                                } else {
-                                  setTodoDropPreview({ kind: 'project-end', targetId: group.projectId });
-                                }
-                              }
-                            }}
-                            onDrop={(event) => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                              setTodoDropPreview(null);
-                              const draggedTask = getDraggedTodoTask(event);
-                              if (draggedTask) {
-                                if ((draggedTask.projectId || 'uncategorized') !== group.projectId) {
-                                  void moveTodoTaskToProject(draggedTask, group.projectId);
-                                } else {
-                                  void moveTodoTaskRelative(draggedTask, task, group.projectId, getDropPosition(event));
-                                }
-                              }
-                            }}
-                            style={{ viewTransitionName: `todo-${task.id}`, '--project-color': getProjectColor(task.projectId) } as CSSProperties}
-                          >
-                            <button
-                              className="todo-check"
-                              aria-label={isDone ? '恢复待办' : '完成待办'}
-                              type="button"
-                              draggable={false}
-                              onMouseDown={(event) => event.stopPropagation()}
-                              onDragStart={(event) => event.preventDefault()}
-                              onClick={(event) => {
-                                event.preventDefault();
-                                event.stopPropagation();
-                                void updateTodoTaskStatus(task, isDone ? 'todo' : 'done');
-                              }}
-                            >
-                              {isDone ? '✓' : ''}
-                            </button>
-                            <div className="todo-copy">
-                              {editingTodoTaskId === task.id && editingTodoField === 'title' ? (
-                                <textarea
-                                  className="todo-title-editor"
-                                  rows={getTextEditorRows(todoTaskDraft.title, 12)}
-                                  value={todoTaskDraft.title}
-                                  onChange={(event) => setTodoTaskDraft((draft) => ({ ...draft, title: event.target.value }))}
-                                  autoFocus
-                                  onBlur={() => {
-                                    void saveTodoTaskDraft(task.id);
-                                  }}
-                                />
-                              ) : (
-                                <span className="todo-content-text" onDoubleClick={() => startEditTodoTask(task, 'title')}>{task.title}</span>
-                              )}
-                            </div>
-                            <div className="todo-inline-actions todo-row-actions todo-side-meta">
-                              {getTodoDateTag(task) ? (
-                                <button
-                                  className="todo-date-tag"
-                                  style={getTodoDateTagStyle(task)}
-                                  title="移除截止时间"
-                                  type="button"
-                                  onMouseDown={(event) => event.stopPropagation()}
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    void clearTodoDeadline(task);
-                                  }}
-                                >
-                                  <span>{getTodoDateTag(task)}</span>
-                                </button>
-                              ) : null}
-                            </div>
-                          </article>
-                        );
-                      })}
-                      {todoDropPreview?.kind === 'project-end' && todoDropPreview.targetId === group.projectId && draggedTodoTaskId ? (
-                        <div className="todo-drop-slot">松开后移到这个项目末尾</div>
-                      ) : null}
-                    </div>
-                  </section>
-                ))
-              ) : (
-                <p className="muted">还没有待办任务。说一句“我要写完产品方案”，这里就会出现。</p>
-              )}
-            </div>
-          </section>
         ) : null}
 
         {viewMode === 'goals' ? (
@@ -3806,42 +3574,7 @@ export function App() {
       </section>
 
       <div className="panel-resizer" onMouseDown={startPanelResize} title="拖动调整右侧宽度" />
-      <aside className={`today-panel ${viewMode === 'todos' ? 'todo-side-panel' : 'week-detail-panel'}`}>
-        {viewMode === 'todos' ? (
-          <section className="todo-month-panel">
-            <p className="eyebrow">{now.getFullYear()} 年 {now.getMonth() + 1} 月</p>
-            <div className="todo-month-weekdays">
-              {['一', '二', '三', '四', '五', '六', '日'].map((day) => <span key={day}>{day}</span>)}
-            </div>
-            <div className="todo-month-grid">
-              {monthCalendarDays.map((day) => (
-                <button
-                  className={`todo-month-day ${day.inMonth ? '' : 'todo-month-muted'} ${todoDeadlineDates.has(day.date) ? 'todo-month-deadline' : ''} ${todoDropPreview?.kind === 'date' && todoDropPreview.targetId === day.date ? 'todo-date-drop-preview' : ''}`}
-                  data-todo-date={day.date}
-                  key={day.date}
-                  onClick={() => selectCalendarDate(day.date)}
-                  onDragOver={(event) => event.preventDefault()}
-                  onDrop={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    const task = getDraggedTodoTask(event);
-                    if (task) void assignTodoDeadline(task, day.date);
-                  }}
-                >
-                  <span>{day.day}</span>
-                  {todoDeadlineDots.get(day.date)?.length ? (
-                    <i className="todo-month-dots">
-                      {todoDeadlineDots.get(day.date)!.slice(0, 8).map((color, index) => (
-                        <b key={`${color}_${index}`} style={{ backgroundColor: color }} />
-                      ))}
-                    </i>
-                  ) : null}
-                </button>
-              ))}
-            </div>
-          </section>
-        ) : (
-          <>
+      <aside className="today-panel week-detail-panel">
         <section>
           <div className="detail-title-row">
             <h2>{selectedDay ? formatSelectedDayTitle(selectedDay.date, selectedDay.label) : '选择一天'}</h2>
@@ -3952,60 +3685,8 @@ export function App() {
             </div>
           </section>
 
-          <section className="today-detail-zone today-task-zone">
-            <p className="eyebrow">待办</p>
-            <div className="today-zone-scroll">
-              {selectedDay?.tasks.filter((item) => !needsTaskClarification(item)).length ? (
-                selectedDay.tasks
-                  .filter((item) => !needsTaskClarification(item))
-                  .slice()
-                  .sort((a, b) => (a.dueAt ?? '').localeCompare(b.dueAt ?? ''))
-                  .map((item) => (
-                    <article
-                      className={`detail-row detail-row-deadline ${detailDraft && selectedDetail?.id === item.id && selectedDetail.kind === 'task' ? 'detail-row-editing' : ''} ${detailContextMenu?.item.id === item.id && detailContextMenu.item.kind === 'task' ? 'detail-context-selected' : ''}`}
-                      key={item.id}
-                      onClick={(event) => openDetailFromRow(event, { ...item, kind: 'task' })}
-                      onDoubleClick={(event) => editDetailFromRow(event, { ...item, kind: 'task' })}
-                      onContextMenu={(event) => openDetailContextMenu(event, { ...item, kind: 'task' })}
-                    >
-                      <div className="detail-row-head">
-                        <div>
-                          <strong>{formatItemTime(item)}</strong>
-                          <span>{item.title}</span>
-                        </div>
-                      </div>
-                      {renderDetailExtras(item)}
-                      {renderInlineDetailEditor({ ...item, kind: 'task' })}
-                    </article>
-                  ))
-              ) : (
-                <p className="muted">这天没有到期待办。</p>
-              )}
-            </div>
-          </section>
         </div>
-          </>
-        )}
       </aside>
-
-      {todoContextMenu ? (
-        <div
-          className="todo-context-menu"
-          style={{ left: todoContextMenu.x, top: todoContextMenu.y }}
-          onClick={(event) => event.stopPropagation()}
-          onContextMenu={(event) => event.preventDefault()}
-        >
-          <button
-            type="button"
-            onClick={() => {
-              if (todoContextMenu.kind === 'task') void deleteTodoTask(todoContextMenu.task);
-              else void deleteTodoProject(todoContextMenu.project);
-            }}
-          >
-            删除
-          </button>
-        </div>
-      ) : null}
 
       {detailContextMenu ? (
         <div
@@ -5406,7 +5087,7 @@ function isBatchOperationPreview(value: unknown): value is BatchOperationPreview
 function getDraftKindLabel(kind: PlanDraftItem['kind'] | CandidateItem['kind']) {
   const labels: Record<string, string> = {
     event: '日程',
-    task: '待办',
+    task: '事项',
     reminder: '提醒',
     profile_update: '画像',
     habit_rule: '周期',
@@ -5518,7 +5199,7 @@ function summarizeScheduleTitle(intent: ParsedIntent, text: string) {
   if (/(上课|课程|听课|讲座|课堂)/.test(normalized)) return '上课';
   if (/(开会|会议|会\b|沟通|讨论|复盘会)/.test(normalized)) return '开会';
   if (intent === 'add_reminder') return '提醒';
-  if (intent === 'add_task') return '任务';
+  if (intent === 'add_task') return '事项';
   return getShortTitle(normalized);
 }
 
@@ -5566,7 +5247,7 @@ function getIntentLabel(intent: ParsedIntent) {
     update_event: '修改日程',
     delete_event: '删除日程',
     annotate_event: '补充日程',
-    add_task: '任务',
+    add_task: '事项',
     start_work: '开始工作',
     pause_work: '暂停',
     resume_work: '继续',
@@ -5619,7 +5300,7 @@ function getCommitMessage(result?: ParseResult, resolvedBy?: string, feedback?: 
   if (resolvedBy === 'profile-update') return '画像和作息已更新。';
   if (resolvedBy === 'save-pending') return '已放进待补充事项。';
   if (resolvedBy === 'keep-both') return '已重叠新增。';
-  if (resolvedBy === 'task-split') return '任务先记成待拆分。';
+  if (resolvedBy === 'task-split') return '事项先记成待补充。';
   if (resolvedBy === 'defer-tomorrow') return '任务已经改到明天。';
   if (resolvedBy === 'duplicate-add') return '已继续新增这条任务。';
   if (resolvedBy === 'skip-duplicate') return '好，先保留已有任务，不重复记录。';
@@ -5630,7 +5311,7 @@ function getCommitMessage(result?: ParseResult, resolvedBy?: string, feedback?: 
     update_event: '日程修改好了。',
     delete_event: '日程已删除。',
     annotate_event: '日程补充好了。',
-    add_task: '任务记好了，先放进今日/待办里。',
+    add_task: '事项会先转成日程安排。',
     start_work: '开工啦，我会帮你留下执行脚印。',
     pause_work: '暂停记下来了，先缓一口气。',
     resume_work: '继续工作已记录，节奏接回来了。',

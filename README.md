@@ -1,50 +1,31 @@
-# YayaMind 个人助手 Web MVP
+# YayaMind
 
-YayaMind 是一个本地优先的 AI 个人助手 Web 模拟版。它不是普通 TODO 或日历，而是围绕“计划安排、真实执行记录、动态重排、提醒、复盘和个人画像”做的生活化助手。
+YayaMind 是一个本地优先的桌面日程安排助手。当前版本为 **1.1 Schedule-only**：以一周日程、今日详情、桌面小猫语音输入、提醒、画像和周期日程为主，不再提供待办列表或项目待办。
 
-第一版用网页模拟桌面工作台和布偶猫浮窗，后续可以迁移到 Electron 或 Tauri 桌面壳。
+1.0 已冻结到 GitHub tag `v1.0-ai-assistant`。如果后续需要恢复待办能力，从该 tag 拉取即可。
 
-## 最新状态
+## 当前能力
 
-当前版本已经进入 V1.1 体验打磨阶段，主界面是“左侧导航 + 中间一周安排 + 右侧日期详情 + 小猫语音入口”。
+- 一周日程：周一到周日时间轴、当前时间线、冲突并排、拖动和拉伸时间块。
+- 今日详情：编辑日程、查看待补充事项、提醒和天气提示。
+- 桌面小猫：语音输入、原文确认、追问、草稿确认、修改和取消。
+- AI 理解：支持 DeepSeek 或 OpenAI compatible 接口；无 key 时回退规则解析。
+- 整组草稿：复杂安排先生成草稿，确认后写入。
+- 周期日程：有明确时间的周期安排生成周期规则和近期日程实例。
+- 画像：从日程和执行记录中沉淀时间习惯、生活节奏和近期信号。
+- 总结：生成每日/每周 Markdown 总结到本地目录。
+- 桌面版：Electron 打包后同步到 `D:\YayaMind` 作为真实入口。
 
-本轮最新完成：
+## 1.1 删除内容
 
-- 小猫首屏只显示头像，不再默认弹出历史消息或引导文案。
-- 点击小猫即可听写，停顿约 1 秒自动写入；按住并移动才拖动头像。
-- 新增日程/任务后会自动跳到对应日期时间，并显示 `确认 / 修改 / 取消`。
-- 可以对刚写入的事项继续语音修改日期、时间、备注和准备事项。
-- 可以给已有会议追加备注/准备事项，例如“明天晚上的那个会加备注，要带笔记本电脑”。
-- 中间一周安排保持周一到周日缩略视图，每天内部可滚动，日程块可拖动/拉伸。
-- 右侧日期详情承担完整编辑：具体安排、待补充事项、截止任务、提醒都在右侧处理。
-- 视觉继续保持浅色暖调，今天列半透明，会议卡片使用暖色系。
+- 没有“待办”导航。
+- 没有项目待办页面。
+- 今日详情没有待办框。
+- `/api/tasks` 与 `/api/todo-projects` 不属于当前版本 API。
+- 自然语言中的“任务/待办/要做某事”会被日程化：有时间直接进日程，无时间则追问时间。
+- “每天给猫刷牙”这类无时间习惯不会生成待办，会追问具体时间。
 
-## 已实现能力
-
-- 自然周一周安排：周一到周日、当前日期高亮、过去日期弱化。
-- 日历时间轴：0:00-24:00 时间块、当前时间线、过去时间遮罩。
-- 日历块操作：支持拖动移动时间块，支持拖上下边缘调整开始/结束时间，按半小时粒度保存。
-- 日程与任务写入：自然语言输入可写入 `events.jsonl`、`tasks.jsonl`。
-- AI 输入理解：已接入 DeepSeek adapter，有 key 时优先使用 AI 解析，无 key 或失败时回退规则解析。
-- 工作记录：开始、暂停、结束、进度快捷记录写入 `work_logs.jsonl`。
-- 冲突处理：时间重叠、疑似重复、时间不明确、计划过载会触发确认方案。
-- 冲突视觉：冲突时间块会在一周安排和右侧详情同步显示“已冲突”。
-- 语音对话：小猫浮窗以语音实时转写为主，用户确认后写入；追问、选择、理解预览收敛在一个气泡内。
-- 事项编辑：日程、任务、待定事项支持右下角内联编辑和软删除。
-- 执行记录：执行记录支持编辑和删除。
-- 提醒：到点触发、小猫气泡、浏览器通知、完成、稍后、忽略；右侧日期详情默认只展示出门天气提醒。
-- 天气/出门提醒：后端读取 Open-Meteo 7 天游雨概率，识别外出安排并提示带伞等准备。
-- 阶段性目标：本地 `goals.json` 目标管理。
-- 个人画像：根据执行记录和任务信号形成画像雏形。
-- Markdown 总结：生成每日/每周总结到 `personal-assistant-data/summaries/`。
-- 布偶猫浮窗：原创动画风格头像，可拖动，支持语音对话和陪伴式反馈。
-
-## 技术栈
-
-- 前端：React + TypeScript + Vite
-- 后端：Node.js + Fastify
-- 数据：本地 JSON / JSONL / Markdown
-- 存储目录：`personal-assistant-data/`
+旧数据文件 `tasks.jsonl` 和 `todo_projects.json` 不会被删除，但 1.1 不读取展示、不写入。
 
 ## 本地运行
 
@@ -55,20 +36,18 @@ npm run dev
 
 默认端口：
 
-- Web 前端：http://localhost:5173 或 Vite 自动分配的相邻端口，例如 http://localhost:5174
+- Web 前端：http://localhost:5173
 - 本地 API：http://localhost:8787
 
 AI 配置：
 
 - 复制 `.env.example` 为 `.env.local`。
-- 填入 `DEEPSEEK_API_KEY` 后重启后端。
-- 可访问 `http://localhost:8787/api/ai/status` 确认当前 AI provider、model 和 key 是否生效；接口不会返回密钥。
+- 填入 `DEEPSEEK_API_KEY` 或在设置页配置 OpenAI compatible 接口。
+- 访问 `http://localhost:8787/api/ai/status` 可查看接口状态，不返回密钥。
 
-## 桌面应用与 D 盘目录
+## 桌面应用
 
-YayaMind 桌面版使用 Electron。当前桌面应用产物、运行数据和缓存统一放在 `D:\YayaMind`，避免占用 C 盘。
-
-常用入口：
+常用命令：
 
 ```powershell
 npm run desktop:dev
@@ -76,77 +55,67 @@ npm run desktop:pack
 npm run desktop:dist
 ```
 
-打包输出：
+当前打包输出：
 
 ```text
-D:\YayaMind\release\win-unpacked\YayaMind.exe
-D:\YayaMind\release\YayaMind Setup 0.1.0.exe
-D:\YayaMind\release\YayaMind 0.1.0.exe
+D:\YayaMindBuild\release\win-unpacked
 ```
 
-运行与缓存目录：
+当前真实入口：
 
 ```text
-D:\YayaMind\userData
-D:\YayaMind\sessionData
-D:\YayaMind\cache\npm
-D:\YayaMind\cache\electron
-D:\YayaMind\cache\electron-builder
+D:\YayaMind\YayaMind.exe
 ```
 
-如果要日常直接启动，双击 `D:\YayaMind\release\win-unpacked\YayaMind.exe`。如果要创建桌面快捷方式，运行 `D:\YayaMind\release\YayaMind Setup 0.1.0.exe`。
+真实入口运行数据：
 
-打包版已验证可脱离命令行启动，本地 API `http://127.0.0.1:8787/api/bootstrap` 返回 200。
+```text
+D:\YayaMindData\personal-assistant-data
+D:\YayaMindData\userData\desktop-cat.log
+```
 
-## 部署与作品集预览
+阶段收口时需要：
 
-当前项目支持 Vercel 作品集预览：本地后端可用时使用真实数据；线上没有 `/api` 后端时，会自动进入演示数据，保证面试官打开链接能看到产品形态。
-
-真实跨设备使用已预留 Vercel `/api` Serverless + Supabase 存储模式。配置 Supabase Auth 和环境变量后，线上同一个网址会先登录，再通过云端 API 保存当前账号的数据。具体步骤见 [DEPLOYMENT.md](DEPLOYMENT.md)。
+1. `npm run build`
+2. `npm run desktop:pack`
+3. 同步 `D:\YayaMindBuild\release\win-unpacked` 到 `D:\YayaMind`
+4. 冷启动 `D:\YayaMind\YayaMind.exe`
+5. 验证 `http://127.0.0.1:8787/api/bootstrap` 返回 200
 
 ## 数据文件
 
-运行后会自动创建：
+运行后会自动创建本地数据：
 
 ```text
 personal-assistant-data/
   events.jsonl
-  tasks.jsonl
-  work_logs.jsonl
-  reviews.jsonl
   reminders.jsonl
+  recurring_rules.json
+  plan_drafts.json
+  conversation_context.json
+  work_logs.jsonl
   goals.json
   profiles.json
   settings.json
   summaries/
 ```
 
-该目录已加入 `.gitignore`，避免真实个人数据进入版本管理。
+历史兼容数据：
+
+```text
+tasks.jsonl
+todo_projects.json
+```
+
+这两个文件属于 1.0 待办能力的历史数据，1.1 不作为当前功能读取展示。
 
 ## 文档
-
-本文档面向外部展示和运行入口说明，不是日常开发依据。日常开发优先读：
 
 - 产品需求：[PRD.md](PRD.md)
 - 系统设计：[SDD.md](SDD.md)
 - 当前任务：[TODO.md](TODO.md)
-- 文件定位：[FILE_INDEX.md](FILE_INDEX.md)，供开发者快速定位代码、数据、日志和资源文件。
+- 文件定位：[FILE_INDEX.md](FILE_INDEX.md)
+- 项目上下文：[PROJECT_CONTEXT.md](PROJECT_CONTEXT.md)
+- 1.1 验收用例：[AI_1.1_TEST_CASES.md](AI_1.1_TEST_CASES.md)
 
-按需回溯和展示材料：
-
-- 项目上下文与历史摘要：[PROJECT_CONTEXT.md](PROJECT_CONTEXT.md)
-- 模块 SDD 细节：[docs/sdd/](docs/sdd/)
-- 架构与演示：[docs/portfolio/](docs/portfolio/)
-- 面试材料：[docs/interview/](docs/interview/)
-- 历史推进记录：[TASK_LOG.md](docs/archive/TASK_LOG.md)
-- 历史决策记录：[DECISIONS.md](docs/archive/DECISIONS.md)
-
-## 面试材料
-
-`docs/interview/` 面向 AI 产品经理面试准备，建议先读 [面试材料索引](docs/interview/README.md)，再按顺序阅读：
-
-- [PRD 产品需求文档](docs/interview/01-PRD.md)
-- [SDD 开发设计与实现流程](docs/interview/02-SDD.md)
-- [竞品分析](docs/interview/03-COMPETITOR_ANALYSIS.md)
-- [项目详情与面试讲解稿](docs/interview/04-PROJECT_DETAILS.md)
-- [面试高频 Q&A](docs/interview/05-INTERVIEW_QA.md)
+历史资料和面试材料在 `docs/` 下。

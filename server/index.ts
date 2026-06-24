@@ -7,14 +7,10 @@ import { getAiStatus } from './aiAdapter.js';
 import {
   appendWorkLog,
   cancelEvent,
-  cancelTask,
   checkConflicts,
   commitTextInput,
   createGoal,
   createManualEvent,
-  createTodoProject,
-  createTodoTask,
-  deleteTodoProject,
   deleteWorkLog,
   ensureDataFiles,
   generateMarkdownSummary,
@@ -27,12 +23,10 @@ import {
   updateGoalStatus,
   updateReminderStatus,
   updateSettings,
-  updateTodoProject,
-  updateTask,
   updateWorkLog
 } from './dataStore.js';
 import { enterRequestContext } from './requestContext.js';
-import type { ParseResult, TaskRecord } from './types.js';
+import type { ParseResult } from './types.js';
 
 const staticMimeTypes: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -92,18 +86,6 @@ app.get('/api/today', async () => {
 });
 
 app.get('/api/goals', async () => listGoals());
-
-app.post<{ Body: { title?: string; reuseExisting?: boolean } }>('/api/todo-projects', async (request, reply) => {
-  const title = request.body?.title?.trim();
-  if (!title) return reply.code(400).send({ ok: false, error: 'title is required' });
-  return createTodoProject(title, { reuseExisting: request.body?.reuseExisting ?? false });
-});
-
-app.patch<{ Params: { id: string }; Body: { title?: string; order?: number } }>('/api/todo-projects/:id', async (request) =>
-  updateTodoProject(request.params.id, request.body ?? {})
-);
-
-app.delete<{ Params: { id: string } }>('/api/todo-projects/:id', async (request) => deleteTodoProject(request.params.id));
 
 app.post<{ Body: { title?: string; targetDate?: string | null } }>('/api/goals', async (request, reply) => {
   const title = request.body?.title?.trim();
@@ -201,21 +183,10 @@ app.post<{ Body: { title?: string; startAt?: string; endAt?: string; date?: stri
   checkConflicts(request.body ?? {})
 );
 
-app.patch<{ Params: { id: string }; Body: { title?: string; notes?: string; dueAt?: string | null; estimatedMinutes?: number | null; preparations?: string[]; status?: TaskRecord['status']; projectId?: string | null; order?: number } }>('/api/tasks/:id', async (request) =>
-  updateTask(request.params.id, request.body ?? {})
-);
-
-app.post<{ Body: { title?: string; notes?: string; projectId?: string | null } }>('/api/tasks', async (request, reply) => {
-  const result = await createTodoTask(request.body ?? {});
-  return result.ok ? result : reply.code(400).send(result);
-});
-
 app.post<{ Body: { title?: string; date?: string; startAt?: string; endAt?: string; type?: 'meeting' | 'task_block' | 'life' | 'exercise' | 'meal' | 'rest' | 'risk' | 'other'; purpose?: string; preparations?: string[]; notes?: string } }>('/api/events', async (request, reply) => {
   const result = await createManualEvent(request.body ?? {});
   return result.ok ? result : reply.code(400).send(result);
 });
-
-app.delete<{ Params: { id: string } }>('/api/tasks/:id', async (request) => cancelTask(request.params.id));
 
 app.patch<{ Params: { id: string }; Body: { title?: string; notes?: string; startAt?: string; endAt?: string; date?: string; purpose?: string; preparations?: string[] } }>('/api/events/:id', async (request) =>
   updateEvent(request.params.id, request.body ?? {})
