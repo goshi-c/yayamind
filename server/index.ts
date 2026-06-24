@@ -1,4 +1,7 @@
 import Fastify from 'fastify';
+import { createReadStream } from 'node:fs';
+import { stat } from 'node:fs/promises';
+import { extname, join, normalize, resolve } from 'node:path';
 import { verifySupabaseUserId } from './auth.js';
 import { getAiStatus } from './aiAdapter.js';
 import {
@@ -8,6 +11,7 @@ import {
   checkConflicts,
   commitTextInput,
   createGoal,
+  createManualEvent,
   createTodoProject,
   createTodoTask,
   deleteTodoProject,
@@ -22,12 +26,40 @@ import {
   updateEvent,
   updateGoalStatus,
   updateReminderStatus,
+  updateSettings,
   updateTodoProject,
   updateTask,
   updateWorkLog
 } from './dataStore.js';
 import { enterRequestContext } from './requestContext.js';
 import type { ParseResult, TaskRecord } from './types.js';
+
+const staticMimeTypes: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
+  '.json': 'application/json; charset=utf-8'
+};
+
+async function resolveDesktopStaticFile(staticDir: string, requestPath: string) {
+  const cleanPath = requestPath.split('?')[0].split('#')[0];
+  const relativePath = cleanPath === '/' ? 'index.html' : cleanPath.replace(/^\/+/, '');
+  const resolvedRoot = resolve(staticDir);
+  const resolvedFile = resolve(resolvedRoot, normalize(relativePath));
+  if (!resolvedFile.startsWith(resolvedRoot)) return null;
+  try {
+    const fileStat = await stat(resolvedFile);
+    if (fileStat.isFile()) return resolvedFile;
+  } catch {
+    // Fall back to index.html for client-side routes.
+  }
+  return join(resolvedRoot, 'index.html');
+}
 
 export function buildApp() {
 const app = Fastify({ logger: true });
@@ -67,7 +99,7 @@ app.post<{ Body: { title?: string; reuseExisting?: boolean } }>('/api/todo-proje
   return createTodoProject(title, { reuseExisting: request.body?.reuseExisting ?? false });
 });
 
-app.patch<{ Params: { id: string }; Body: { title?: string } }>('/api/todo-projects/:id', async (request) =>
+app.patch<{ Params: { id: string }; Body: { title?: string; order?: number } }>('/api/todo-projects/:id', async (request) =>
   updateTodoProject(request.params.id, request.body ?? {})
 );
 
@@ -87,6 +119,10 @@ app.post<{ Params: { id: string }; Body: { status?: 'active' | 'paused' | 'done'
 
 app.get('/api/profile', async () => getProfileData());
 
+app.patch<{ Body: Parameters<typeof updateSettings>[0] }>('/api/settings', async (request) =>
+  updateSettings(request.body ?? {})
+);
+
 app.post<{ Body: { kind?: 'daily' | 'weekly' } }>('/api/summaries/generate', async (request) =>
   generateMarkdownSummary(request.body?.kind ?? 'daily')
 );
@@ -97,15 +133,21 @@ app.post<{ Body: { text: string; source?: string; selectedOptionId?: string | nu
     return reply.code(400).send({ ok: false, error: 'text is required' });
   }
   const result = await commitTextInput(text, request.body.source, { selectedOptionId: request.body.selectedOptionId });
+  const logResult = result as {
+    ok: boolean;
+    needsConfirmation?: boolean;
+    resolvedBy?: string | null;
+    parseResult?: ParseResult;
+  };
   request.log.info({
     input: text,
     inputEscaped: escapeForLog(text),
     source: request.body.source ?? 'text',
     selectedOptionId: request.body.selectedOptionId ?? null,
-    ok: result.ok,
-    needsConfirmation: result.needsConfirmation ?? false,
-    resolvedBy: result.resolvedBy ?? null,
-    parse: summarizeParseResult(result.parseResult)
+    ok: logResult.ok,
+    needsConfirmation: logResult.needsConfirmation ?? false,
+    resolvedBy: logResult.resolvedBy ?? null,
+    parse: summarizeParseResult(logResult.parseResult)
   }, 'input commit result');
   return result;
 });
@@ -159,12 +201,17 @@ app.post<{ Body: { title?: string; startAt?: string; endAt?: string; date?: stri
   checkConflicts(request.body ?? {})
 );
 
-app.patch<{ Params: { id: string }; Body: { title?: string; notes?: string; dueAt?: string | null; estimatedMinutes?: number | null; preparations?: string[]; status?: TaskRecord['status']; projectId?: string | null } }>('/api/tasks/:id', async (request) =>
+app.patch<{ Params: { id: string }; Body: { title?: string; notes?: string; dueAt?: string | null; estimatedMinutes?: number | null; preparations?: string[]; status?: TaskRecord['status']; projectId?: string | null; order?: number } }>('/api/tasks/:id', async (request) =>
   updateTask(request.params.id, request.body ?? {})
 );
 
 app.post<{ Body: { title?: string; notes?: string; projectId?: string | null } }>('/api/tasks', async (request, reply) => {
   const result = await createTodoTask(request.body ?? {});
+  return result.ok ? result : reply.code(400).send(result);
+});
+
+app.post<{ Body: { title?: string; date?: string; startAt?: string; endAt?: string; type?: 'meeting' | 'task_block' | 'life' | 'exercise' | 'meal' | 'rest' | 'risk' | 'other'; purpose?: string; preparations?: string[]; notes?: string } }>('/api/events', async (request, reply) => {
+  const result = await createManualEvent(request.body ?? {});
   return result.ok ? result : reply.code(400).send(result);
 });
 
@@ -181,6 +228,16 @@ app.patch<{ Params: { id: string }; Body: { note?: string; at?: string } }>('/ap
 );
 
 app.delete<{ Params: { id: string } }>('/api/work-logs/:id', async (request) => deleteWorkLog(request.params.id));
+
+if (process.env.DESKTOP_STATIC_DIR) {
+  app.get('/*', async (request, reply) => {
+    const filePath = await resolveDesktopStaticFile(process.env.DESKTOP_STATIC_DIR as string, request.url);
+    if (!filePath) return reply.code(404).send('Not found');
+    const ext = extname(filePath).toLowerCase();
+    reply.header('Content-Type', staticMimeTypes[ext] ?? 'application/octet-stream');
+    return reply.send(createReadStream(filePath));
+  });
+}
 
 return app;
 }

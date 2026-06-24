@@ -1,5 +1,6 @@
 ﻿import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type MouseEvent as ReactMouseEvent } from 'react';
-import ragdollAvatar from './assets/ragdoll-avatar.png';
+import catListeningAvatar from './assets/desktop/cat-listening.png';
+import catSleepingAvatar from './assets/desktop/cat-sleeping.png';
 
 type AssistantData = {
   today: {
@@ -24,6 +25,11 @@ type AssistantData = {
   tasks: TaskListItem[];
   goals: GoalRecord[];
   profile: ProfileData;
+  planDrafts: PlanDraft[];
+  conversation?: ConversationContext;
+  titleLexicon?: Array<{ canonicalTitle: string; aliases: string[]; evidenceCount: number }>;
+  recurringRules?: RecurringRule[];
+  settings: AppSettings;
 };
 
 type CalendarItem = {
@@ -34,6 +40,7 @@ type CalendarItem = {
   dueAt?: string | null;
   date?: string;
   type: string;
+  projectTitle?: string;
   lane?: number;
   laneCount?: number;
   conflict?: boolean;
@@ -43,9 +50,12 @@ type CalendarItem = {
   reminderIds?: string[];
   estimatedMinutes?: number | null;
   rawText?: string;
+  isDraft?: boolean;
+  draftId?: string;
+  tags?: string[];
 };
 
-type CalendarReminder = { id: string; title: string; remindAt: string; status: string; relatedType?: string; relatedId?: string | null };
+type CalendarReminder = { id: string; title: string; remindAt: string; status: string; updatedAt?: string; relatedType?: string; relatedId?: string | null; isDraft?: boolean };
 
 type DetailTarget = CalendarItem & { kind: 'event' | 'task' };
 
@@ -57,6 +67,7 @@ type TodoProject = {
   id: string;
   title: string;
   status: 'active' | 'archived';
+  order?: number;
   createdAt: string;
   updatedAt: string;
 };
@@ -67,6 +78,7 @@ type TaskListItem = {
   status: 'todo' | 'in_progress' | 'paused' | 'done' | 'partially_done' | 'cancelled' | 'deferred';
   projectId: string;
   projectTitle: string;
+  order?: number;
   dueAt: string | null;
   estimatedMinutes: number | null;
   notes?: string;
@@ -77,6 +89,77 @@ type TaskListItem = {
 
 type TodoTaskDraft = { title: string; notes: string; projectId: string };
 type TodoEditField = 'title' | 'notes';
+type TodoDragKind = 'task' | 'project';
+type TodoDragReady = { kind: TodoDragKind; id: string } | null;
+type TodoDropPreview =
+  | { kind: 'project'; targetId: string; position: 'before' | 'after' }
+  | { kind: 'task'; targetId: string; position: 'before' | 'after' }
+  | { kind: 'project-end'; targetId: string }
+  | { kind: 'date'; targetId: string };
+
+function getTodoPreviewPosition(preview: TodoDropPreview | null) {
+  return preview && 'position' in preview ? preview.position : null;
+}
+
+type AppSettings = {
+  timezone: string;
+  dataVersion: number;
+  assistantName: string;
+  notification: {
+    browserNotificationEnabled: boolean;
+    quietDuringWorking: boolean;
+  };
+  ui: {
+    calendarDays: number;
+    dayStartHour: number;
+    dayEndHour: number;
+  };
+  habits: {
+    sleepStart: string;
+    wakeUp: string;
+    restDayMode: 'weekend' | 'single_sunday' | 'single_saturday' | 'alternate_weekends' | 'custom';
+    customRestDays: number[];
+    alternateWeekendStartsOn: string;
+    showLegalHolidays: boolean;
+  };
+  weather: {
+    enabled: boolean;
+    latitude: number;
+    longitude: number;
+    city: string;
+    rainProbabilityThreshold: number;
+    outdoorLeadMinutes: number;
+  };
+  ai: {
+    provider: 'deepseek' | 'openai-compatible';
+    enabled: boolean;
+    baseUrl: string;
+    model: string;
+    apiKey: string;
+  };
+};
+
+type SettingsDraft = {
+  wakeUp: string;
+  sleepStart: string;
+  restDayMode: AppSettings['habits']['restDayMode'];
+  showLegalHolidays: boolean;
+  aiProvider: AppSettings['ai']['provider'];
+  aiEnabled: boolean;
+  aiBaseUrl: string;
+  aiModel: string;
+  aiApiKey: string;
+};
+
+type ManualEventDraft = {
+  title: string;
+  date: string;
+  startTime: string;
+  endTime: string;
+  type: CalendarItem['type'];
+  notes: string;
+  preparationsText: string;
+};
 
 type DetailDraft = {
   id: string;
@@ -100,9 +183,10 @@ type SpeechRecognitionLike = {
   interimResults: boolean;
   onresult: ((event: SpeechRecognitionEventLike) => void) | null;
   onend: (() => void) | null;
-  onerror: (() => void) | null;
+  onerror: ((event?: unknown) => void) | null;
   start: () => void;
   stop: () => void;
+  abort?: () => void;
 };
 
 type SpeechRecognitionEventLike = {
@@ -113,6 +197,46 @@ type SpeechRecognitionEventLike = {
 type WindowWithSpeech = Window & {
   SpeechRecognition?: new () => SpeechRecognitionLike;
   webkitSpeechRecognition?: new () => SpeechRecognitionLike;
+};
+
+type WindowWithDesktopBridge = Window & {
+  yayaDesktop?: {
+    isDesktopShell: boolean;
+    onStartVoice: (callback: () => void) => () => void;
+    onStopVoice: (callback: () => void) => () => void;
+    onRecognizedText?: (callback: (text: string) => void) => () => void;
+    onVoiceError?: (callback: (detail?: { kind?: string }) => void) => () => void;
+    onNativeVoiceStart?: (callback: (detail?: { voiceSessionId?: number }) => void) => () => void;
+    onNativeVoiceStop?: (callback: () => void) => () => void;
+    onPrepareNativeVoiceStop?: (callback: () => void) => () => void;
+    onCancelVoice?: (callback: () => void) => () => void;
+    onVoicePartial?: (callback: (text: string) => void) => () => void;
+    onBubbleOption?: (callback: (optionId: string) => void) => () => void;
+    requestVoiceInput?: () => void;
+    setCatState: (state: 'sleeping' | 'listening' | 'thinking' | 'error') => void;
+    setCatMessage?: (message: string) => void;
+    logVoiceEvent?: (detail: Record<string, unknown>) => void;
+    notifyDictationTargetReady?: (detail: { voiceSessionId?: number | null; focused: boolean }) => void;
+  };
+};
+
+type DesktopCatDialogMessage = {
+  id: string;
+  role: 'user' | 'assistant' | 'system' | 'input';
+  text: string;
+  muted?: boolean;
+};
+
+type DesktopCatDialogOption = {
+  id: string;
+  label: string;
+};
+
+type DesktopCatDialogPayload = {
+  type: 'cat-dialog-v1';
+  messages: DesktopCatDialogMessage[];
+  options?: DesktopCatDialogOption[];
+  status?: string;
 };
 
 type GoalRecord = {
@@ -155,7 +279,71 @@ type ParsedIntent =
   | 'finish_work'
   | 'progress_update'
   | 'add_reminder'
-  | 'review_note';
+  | 'review_note'
+  | 'plan_draft'
+  | 'batch_operation'
+  | 'profile_update'
+  | 'habit_rule';
+
+type PlanDraftItem = {
+  id: string;
+  kind: 'event' | 'task' | 'reminder' | 'profile_update' | 'habit_rule';
+  title: string;
+  targetDate?: string;
+  startAt?: string;
+  endAt?: string;
+  dueAt?: string;
+  remindAt?: string;
+  notes?: string;
+  source?: string;
+  risk?: string;
+};
+
+type PlanDraft = {
+  id: string;
+  sourceText: string;
+  date: string;
+  status: 'draft' | 'confirmed' | 'cancelled';
+  items: PlanDraftItem[];
+  assumptions: string[];
+  warnings: string[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+type CandidateItem = {
+  id: string;
+  kind: 'event' | 'task' | 'reminder' | 'project' | 'profile' | 'habit_rule';
+  title: string;
+  detail?: string;
+  date?: string;
+  startAt?: string;
+  endAt?: string;
+  dueAt?: string | null;
+};
+
+type BatchOperationPreview = {
+  id: string;
+  sourceText: string;
+  action: 'delete' | 'update_time' | 'move_project' | 'move_date' | 'update_status';
+  candidates: CandidateItem[];
+  warnings: string[];
+};
+
+type ConversationContext = {
+  id: string;
+  state: string;
+  activeDraftId?: string;
+  lastUserText?: string;
+};
+
+type RecurringRule = {
+  id: string;
+  title: string;
+  frequency: string;
+  nextOccurrences: string[];
+  status: string;
+};
 
 type ParseResult = {
   intent: ParsedIntent;
@@ -171,6 +359,10 @@ type ParseResult = {
   questions: string[];
   warnings: string[];
   preview: Record<string, unknown>;
+  conversationState?: string;
+  draft?: PlanDraft;
+  candidates?: CandidateItem[];
+  batchOperation?: BatchOperationPreview;
 };
 
 type ConflictOption = {
@@ -196,7 +388,55 @@ type PostCommitAction = {
   endAt?: string;
 };
 
-type ViewMode = 'week' | 'todos' | 'goals' | 'profile' | 'summary';
+type ViewMode = 'week' | 'todos' | 'goals' | 'profile' | 'summary' | 'settings';
+
+type TodoContextMenu =
+  | { kind: 'task'; task: TaskListItem; x: number; y: number }
+  | { kind: 'project'; project: TodoProject; x: number; y: number };
+
+type DetailContextMenu = {
+  item: DetailTarget;
+  x: number;
+  y: number;
+};
+
+const defaultSettings: AppSettings = {
+  timezone: 'Asia/Shanghai',
+  dataVersion: 1,
+  assistantName: 'YayaMind',
+  notification: {
+    browserNotificationEnabled: false,
+    quietDuringWorking: true
+  },
+  ui: {
+    calendarDays: 7,
+    dayStartHour: 0,
+    dayEndHour: 24
+  },
+  habits: {
+    wakeUp: '06:00',
+    sleepStart: '22:00',
+    restDayMode: 'weekend',
+    customRestDays: [0, 6],
+    alternateWeekendStartsOn: '2026-01-03',
+    showLegalHolidays: true
+  },
+  weather: {
+    enabled: true,
+    latitude: 31.2304,
+    longitude: 121.4737,
+    city: '',
+    rainProbabilityThreshold: 45,
+    outdoorLeadMinutes: 30
+  },
+  ai: {
+    provider: 'deepseek',
+    enabled: true,
+    baseUrl: 'https://api.deepseek.com',
+    model: 'deepseek-chat',
+    apiKey: ''
+  }
+};
 
 const emptyData: AssistantData = {
   today: {
@@ -218,7 +458,11 @@ const emptyData: AssistantData = {
     workPreferences: { focusStyle: 'unknown', preferredTaskOrder: 'unknown', encouragementStyle: 'gentle' },
     signals: [],
     updatedAt: new Date().toISOString()
-  }
+  },
+  planDrafts: [],
+  recurringRules: [],
+  titleLexicon: [],
+  settings: defaultSettings
 };
 
 const portfolioPreviewData = createPortfolioPreviewData();
@@ -480,13 +724,18 @@ function createPortfolioPreviewData(): AssistantData {
       },
       signals: ['最近在同时推进求职材料、开题报告和作品集部署。'],
       updatedAt: createdAt
-    }
+    },
+    planDrafts: [],
+    recurringRules: [],
+    titleLexicon: [],
+    settings: defaultSettings
   };
 }
 
 export function App() {
   const authConfig = getSupabaseAuthConfig();
   const authRequired = isHostedApp() && Boolean(authConfig);
+  const isDesktopShell = Boolean((window as WindowWithDesktopBridge).yayaDesktop?.isDesktopShell);
   const [data, setData] = useState<AssistantData>(emptyData);
   const [input, setInput] = useState('');
   const [message, setMessage] = useState('');
@@ -523,20 +772,49 @@ export function App() {
   const [editingTodoField, setEditingTodoField] = useState<TodoEditField>('title');
   const [todoTaskDraft, setTodoTaskDraft] = useState<TodoTaskDraft>({ title: '', notes: '', projectId: 'uncategorized' });
   const [draggedTodoTaskId, setDraggedTodoTaskId] = useState<string | null>(null);
+  const [draggedTodoProjectId, setDraggedTodoProjectId] = useState<string | null>(null);
+  const [todoDragReady, setTodoDragReady] = useState<TodoDragReady>(null);
+  const [todoDropPreview, setTodoDropPreview] = useState<TodoDropPreview | null>(null);
   const [isListening, setIsListening] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
-  const [rightPanelWidth, setRightPanelWidth] = useState(360);
+  const [voiceDisplayText, setVoiceDisplayText] = useState('');
+  const [catProcessStatus, setCatProcessStatus] = useState('');
+  const [desktopDialogMessages, setDesktopDialogMessages] = useState<DesktopCatDialogMessage[]>([]);
+  const [todoContextMenu, setTodoContextMenu] = useState<TodoContextMenu | null>(null);
+  const [detailContextMenu, setDetailContextMenu] = useState<DetailContextMenu | null>(null);
+  const [rightPanelWidth, setRightPanelWidth] = useState(340);
   const [dragPreview, setDragPreview] = useState<null | { id: string; startAt: string; endAt: string }>(null);
+  const savingNewTaskProjectIds = useRef<Set<string>>(new Set());
   const [calendarFocusMode, setCalendarFocusMode] = useState<'week' | 'future'>('week');
-  const [todoProjectPage, setTodoProjectPage] = useState<'core' | 'other'>('core');
   const [optimisticTodoStatuses, setOptimisticTodoStatuses] = useState<Record<string, TaskListItem['status']>>({});
+  const [settingsDraft, setSettingsDraft] = useState<SettingsDraft>(() => createSettingsDraft(defaultSettings));
+  const [settingsMessage, setSettingsMessage] = useState('');
+  const [settingsDirty, setSettingsDirty] = useState(false);
+  const [manualEventDraft, setManualEventDraft] = useState<ManualEventDraft | null>(null);
   const inputRef = useRef('');
+  const systemDictationInputRef = useRef<HTMLTextAreaElement | null>(null);
   const pendingClarificationRef = useRef<ParseResult | null>(null);
   const pendingDecisionRef = useRef<ParseResult | null>(null);
+  const parsePreviewRef = useRef<ParseResult | null>(null);
   const isListeningRef = useRef(false);
+  const hasSyncedDesktopVoiceSession = useRef(false);
   const voiceSilenceTimer = useRef<number | null>(null);
+  const voiceNoSpeechTimer = useRef<number | null>(null);
+  const voiceSessionIdRef = useRef(0);
+  const voiceStopReasonRef = useRef<'manual' | 'submit' | 'idle-timeout' | 'error' | null>(null);
+  const voiceRecoverUntilRef = useRef(0);
+  const detailSaveInFlightRef = useRef(false);
+  const todoLongPressTimerRef = useRef<number | null>(null);
+  const isNativeTodoDraggingRef = useRef(false);
+  const todoDropPreviewRef = useRef<TodoDropPreview | null>(null);
+  const voiceRecoverAttemptsRef = useRef(0);
+  const voiceRestartPendingRef = useRef(false);
+  const catStatusClearTimerRef = useRef<number | null>(null);
+  const desktopDialogMessageIdRef = useRef(0);
+  const lastNoSpeechMessageAt = useRef(0);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const seenTriggeredReminderIds = useRef(new Set<string>());
+  const greetedPeriodRef = useRef('');
 
   useEffect(() => {
     const nativeFetch = window.fetch.bind(window);
@@ -569,6 +847,10 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    setSettingsDraft(createSettingsDraft(data.settings ?? defaultSettings));
+  }, [data.settings]);
+
+  useEffect(() => {
     inputRef.current = input;
   }, [input]);
 
@@ -577,12 +859,187 @@ export function App() {
   }, [pendingClarification]);
 
   useEffect(() => {
+    const desktopBridge = (window as WindowWithDesktopBridge).yayaDesktop;
+    const removeStartListener = desktopBridge?.onStartVoice(() => {
+      startVoiceInput();
+    });
+    const removeStopListener = desktopBridge?.onStopVoice(() => {
+      submitCurrentVoiceInput();
+    });
+    const removeRecognizedTextListener = desktopBridge?.onRecognizedText?.((text) => {
+      handleDesktopRecognizedText(text);
+    });
+    const removeVoiceErrorListener = desktopBridge?.onVoiceError?.(() => {
+      setIsListening(false);
+      setMessage('刚才没听到声音，你准备好再点我。');
+    });
+    const removeNativeVoiceStartListener = desktopBridge?.onNativeVoiceStart?.((detail) => {
+      desktopBridge.logVoiceEvent?.({ type: 'native-voice-start', voiceSessionId: detail?.voiceSessionId ?? null });
+      setIsListening(true);
+      isListeningRef.current = true;
+      prepareNewVoiceSession();
+      focusSystemDictationInput({ clear: true, retry: true });
+      setMessage('我在听，你可以一直说；说完再点我一下。');
+    });
+    const removeNativeVoiceStopListener = desktopBridge?.onNativeVoiceStop?.(() => {
+      const dictatedText = systemDictationInputRef.current?.value.trim() || inputRef.current.trim();
+      desktopBridge.logVoiceEvent?.({
+        type: 'native-voice-stop',
+        capturedLength: dictatedText.length,
+        capturePreview: dictatedText.slice(0, 36),
+        hasSystemCapture: Boolean(systemDictationInputRef.current?.value.trim()),
+        hasInputRef: Boolean(inputRef.current.trim())
+      });
+      setIsListening(false);
+      isListeningRef.current = false;
+      setMessage((current) => current || '我在整理刚才这句话。');
+      if (dictatedText) {
+        void handleDesktopRecognizedText(dictatedText);
+      } else {
+        setMessage('刚才没听到文字，你准备好再点我。');
+      }
+    });
+    const removePrepareNativeVoiceStopListener = desktopBridge?.onPrepareNativeVoiceStop?.(() => {
+      desktopBridge.logVoiceEvent?.({
+        type: 'native-voice-stop-prepare',
+        captureLength: systemDictationInputRef.current?.value.trim().length ?? 0,
+        inputLength: inputRef.current.trim().length
+      });
+      focusSystemDictationInput({ notify: false });
+      setMessage('我在整理刚才这句话。');
+    });
+    const removeCancelVoiceListener = desktopBridge?.onCancelVoice?.(() => {
+      desktopBridge.logVoiceEvent?.({ type: 'renderer-cancel-voice' });
+      cancelVoiceInteraction('');
+    });
+    const removeVoicePartialListener = desktopBridge?.onVoicePartial?.((text) => {
+      const nextText = text.trim();
+      if (!nextText) return;
+      desktopBridge.logVoiceEvent?.({
+        type: 'renderer-partial-received',
+        text: nextText,
+        length: nextText.length
+      });
+      updateVoiceText(nextText);
+    });
+    const removeBubbleOptionListener = desktopBridge?.onBubbleOption?.((optionId) => {
+      handleDesktopBubbleOption(optionId);
+    });
+    return () => {
+      removeStartListener?.();
+      removeStopListener?.();
+      removeRecognizedTextListener?.();
+      removeVoiceErrorListener?.();
+      removeNativeVoiceStartListener?.();
+      removeNativeVoiceStopListener?.();
+      removePrepareNativeVoiceStopListener?.();
+      removeCancelVoiceListener?.();
+      removeVoicePartialListener?.();
+      removeBubbleOptionListener?.();
+    };
+  }, []);
+
+  useEffect(() => {
     pendingDecisionRef.current = pendingDecision;
   }, [pendingDecision]);
 
   useEffect(() => {
+    parsePreviewRef.current = parsePreview;
+  }, [parsePreview]);
+
+  useEffect(() => {
+    todoDropPreviewRef.current = todoDropPreview;
+  }, [todoDropPreview]);
+
+  useEffect(() => {
+    function closeContextMenu() {
+      setTodoContextMenu(null);
+      setDetailContextMenu(null);
+    }
+    window.addEventListener('click', closeContextMenu);
+    window.addEventListener('scroll', closeContextMenu, true);
+    window.addEventListener('resize', closeContextMenu);
+    return () => {
+      window.removeEventListener('click', closeContextMenu);
+      window.removeEventListener('scroll', closeContextMenu, true);
+      window.removeEventListener('resize', closeContextMenu);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!draggedTodoTaskId && !draggedTodoProjectId) return;
+
+    function handleTodoPointerMove(event: MouseEvent) {
+      if ((event.buttons & 1) !== 1) {
+        clearTodoDragState();
+        return;
+      }
+      window.getSelection()?.removeAllRanges();
+      const nextPreview = getTodoDropPreviewFromPoint(event.clientX, event.clientY);
+      setTodoDropPreview((current) => {
+        if (
+          current?.kind === nextPreview?.kind &&
+          current?.targetId === nextPreview?.targetId &&
+          getTodoPreviewPosition(current) === getTodoPreviewPosition(nextPreview)
+        ) {
+          return current;
+        }
+        return nextPreview;
+      });
+    }
+
+    function handleTodoPointerUp() {
+      const preview = todoDropPreviewRef.current;
+      void commitTodoDropPreview(preview);
+    }
+
+    window.addEventListener('mousemove', handleTodoPointerMove);
+    window.addEventListener('mouseup', handleTodoPointerUp, { once: true });
+    return () => {
+      window.removeEventListener('mousemove', handleTodoPointerMove);
+      window.removeEventListener('mouseup', handleTodoPointerUp);
+    };
+  }, [draggedTodoTaskId, draggedTodoProjectId, data.tasks, data.todoProjects]);
+
+  useEffect(() => {
     isListeningRef.current = isListening;
   }, [isListening]);
+
+  useEffect(() => {
+    const desktopBridge = (window as WindowWithDesktopBridge).yayaDesktop;
+    if (!desktopBridge) return;
+    const shouldStand =
+      isListening ||
+      isThinking ||
+      Boolean(pendingClarification || pendingDecision || pendingPostCommit || pendingModification || parsePreview || catProcessStatus);
+    if (shouldStand) {
+      hasSyncedDesktopVoiceSession.current = true;
+      desktopBridge.setCatState(isListening ? 'listening' : 'thinking');
+      return;
+    }
+    if (hasSyncedDesktopVoiceSession.current) {
+      desktopBridge.setCatState('sleeping');
+    }
+  }, [isListening, isThinking, pendingClarification, pendingDecision, pendingPostCommit, pendingModification, parsePreview, catProcessStatus, message]);
+
+  useEffect(() => {
+    const desktopBridge = (window as WindowWithDesktopBridge).yayaDesktop;
+    if (!desktopBridge?.setCatMessage) return;
+    desktopBridge.setCatMessage(JSON.stringify(getDesktopCatDialogPayload({
+      message,
+      dialogMessages: desktopDialogMessages,
+      pendingClarification,
+      pendingDecision,
+      pendingPostCommit,
+      pendingModification,
+      parsePreview,
+      input,
+      voiceDisplayText,
+      catProcessStatus,
+      isListening,
+      isThinking
+    })));
+  }, [message, desktopDialogMessages, pendingClarification, pendingDecision, pendingPostCommit, pendingModification, parsePreview, input, voiceDisplayText, catProcessStatus, isListening, isThinking]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -594,7 +1051,10 @@ export function App() {
 
   useEffect(() => {
     const freshTriggered = data.today.reminders.find(
-      (reminder) => reminder.status === 'triggered' && !seenTriggeredReminderIds.current.has(reminder.id)
+      (reminder) =>
+        reminder.status === 'triggered' &&
+        !seenTriggeredReminderIds.current.has(reminder.id) &&
+        isFreshReminderTrigger(reminder, now)
     );
     if (!freshTriggered) return;
 
@@ -603,7 +1063,7 @@ export function App() {
     if ('Notification' in window && Notification.permission === 'granted') {
       new Notification('YayaMind 提醒', { body: freshTriggered.title });
     }
-  }, [data.today.reminders]);
+  }, [data.today.reminders, now]);
 
   useEffect(() => {
     const nextWeatherAlert = data.today.weatherAlerts.find((alert) => {
@@ -614,6 +1074,17 @@ export function App() {
       setMessage(nextWeatherAlert.detail);
     }
   }, [data.today.weatherAlerts]);
+
+  useEffect(() => {
+    if (hasActiveInteractionState({ message, pendingClarification, pendingDecision, pendingPostCommit, pendingModification, input, voiceDisplayText, catProcessStatus, isListening, isThinking })) return;
+    const greetingPeriod = getGreetingPeriod(now);
+    if (greetedPeriodRef.current === greetingPeriod) return;
+    const timer = window.setTimeout(() => {
+      greetedPeriodRef.current = greetingPeriod;
+      setMessage(getTimeGreeting(now, data.settings ?? defaultSettings));
+    }, 900);
+    return () => window.clearTimeout(timer);
+  }, [data.today.reminders.length, data.today.weatherAlerts.length, message, pendingClarification, pendingDecision, pendingPostCommit, pendingModification, input, voiceDisplayText, catProcessStatus, isListening, isThinking, now, data.settings]);
 
   async function requestNotificationPermission() {
     if (!('Notification' in window)) {
@@ -690,6 +1161,20 @@ export function App() {
     }));
   }
 
+  function removeDraftFromView(draftId: string) {
+    setData((current) => ({
+      ...current,
+      planDrafts: current.planDrafts.filter((draft) => draft.id !== draftId),
+      calendar: current.calendar.map((day) => ({
+        ...day,
+        items: day.items.filter((item) => item.draftId !== draftId),
+        pendingItems: day.pendingItems.filter((item) => item.draftId !== draftId),
+        tasks: day.tasks.filter((task) => task.draftId !== draftId),
+        reminders: day.reminders.filter((reminder) => reminder.relatedId !== draftId)
+      }))
+    }));
+  }
+
   function removeTaskFromView(taskId: string) {
     setData((current) => ({
       ...current,
@@ -728,6 +1213,58 @@ export function App() {
     }));
   }
 
+  function reorderTodoProjectsInView(projectId: string, targetProjectId: string, position: 'before' | 'after' = 'before') {
+    if (projectId === targetProjectId || projectId === 'uncategorized' || targetProjectId === 'uncategorized') return;
+    setData((current) => {
+      const projects = [...current.todoProjects].sort(compareTodoProjects);
+      const fromIndex = projects.findIndex((project) => project.id === projectId);
+      const toIndex = projects.findIndex((project) => project.id === targetProjectId);
+      if (fromIndex < 0 || toIndex < 0) return current;
+      const [moved] = projects.splice(fromIndex, 1);
+      const adjustedTargetIndex = projects.findIndex((project) => project.id === targetProjectId);
+      projects.splice(position === 'after' ? adjustedTargetIndex + 1 : adjustedTargetIndex, 0, moved);
+      return {
+        ...current,
+        todoProjects: projects.map((project, index) => ({ ...project, order: index + 1, updatedAt: new Date().toISOString() }))
+      };
+    });
+  }
+
+  function reorderTodoTasksInView(taskId: string, targetTaskId: string, targetProjectId: string, position: 'before' | 'after' = 'before') {
+    if (taskId === targetTaskId) return;
+    setData((current) => {
+      const draggedTask = current.tasks.find((task) => task.id === taskId);
+      if (!draggedTask) return current;
+      const nextProjectId = targetProjectId === 'uncategorized' ? 'uncategorized' : targetProjectId;
+      const siblingTasks = current.tasks
+        .filter((task) => task.id !== taskId && (task.projectId || 'uncategorized') === nextProjectId && task.status !== 'cancelled')
+        .sort(compareTodoTasks);
+      const targetIndex = Math.max(0, siblingTasks.findIndex((task) => task.id === targetTaskId));
+      siblingTasks.splice(position === 'after' ? targetIndex + 1 : targetIndex, 0, { ...draggedTask, projectId: nextProjectId });
+      const orderById = new Map(siblingTasks.map((task, index) => [task.id, index + 1]));
+      return {
+        ...current,
+        tasks: current.tasks.map((task) => {
+          if (task.id === taskId) return { ...task, projectId: nextProjectId, order: orderById.get(task.id), updatedAt: new Date().toISOString() };
+          if (orderById.has(task.id)) return { ...task, order: orderById.get(task.id), updatedAt: new Date().toISOString() };
+          return task;
+        })
+      };
+    });
+  }
+
+  function clearTodoDragState() {
+    isNativeTodoDraggingRef.current = false;
+    if (todoLongPressTimerRef.current) {
+      window.clearTimeout(todoLongPressTimerRef.current);
+      todoLongPressTimerRef.current = null;
+    }
+    setDraggedTodoTaskId(null);
+    setDraggedTodoProjectId(null);
+    setTodoDragReady(null);
+    setTodoDropPreview(null);
+  }
+
   function selectCalendarDate(date: string) {
     setSelectedDate(date);
     setSelectedDetail(null);
@@ -739,7 +1276,7 @@ export function App() {
       const schedule = document.querySelector<HTMLElement>(`[data-date="${date}"] .day-schedule`);
       if (!schedule) return;
       const targetDate = isoTime ? new Date(isoTime) : new Date(`${date}T12:00:00`);
-      const targetRatio = clampPercent((getMinutesFromDayStart(targetDate) / dayMinutes) * 100) / 100;
+      const targetRatio = clampPercent((getMinutesFromDayStart(targetDate, scheduleRange) / scheduleRange.dayMinutes) * 100) / 100;
       const targetTop = schedule.scrollHeight * targetRatio - schedule.clientHeight / 3;
       schedule.scrollTop = Math.max(0, targetTop);
     }, 120);
@@ -966,10 +1503,19 @@ export function App() {
   }, [input, pendingClarification, pendingDecision, isListening, isThinking]);
 
   useEffect(() => {
-    if (!message || pendingClarification || pendingDecision || pendingPostCommit || pendingModification) return;
-    const timer = window.setTimeout(() => setMessage(''), 10_000);
+    if (!message || pendingClarification || pendingDecision || pendingPostCommit || pendingModification || catProcessStatus || isListening || isThinking) return;
+    const timer = window.setTimeout(() => setMessage(''), 5_000);
     return () => window.clearTimeout(timer);
-  }, [message, pendingClarification, pendingDecision, pendingPostCommit, pendingModification]);
+  }, [message, pendingClarification, pendingDecision, pendingPostCommit, pendingModification, catProcessStatus, isListening, isThinking]);
+
+  useEffect(() => {
+    if (!pendingPostCommit || pendingModification || pendingClarification || pendingDecision || input || isListening || isThinking) return;
+    const timer = window.setTimeout(() => {
+      setPendingPostCommit(null);
+      setMessage('');
+    }, 5_000);
+    return () => window.clearTimeout(timer);
+  }, [pendingPostCommit, pendingModification, pendingClarification, pendingDecision, input, isListening, isThinking]);
 
   const calendarDays = useMemo(() => {
     if (data.calendar.length > 0) return data.calendar;
@@ -1020,12 +1566,11 @@ export function App() {
     [data.tasks, optimisticTodoStatuses]
   );
   const projectTodoGroups = useMemo(() => buildProjectTodoGroups(data.todoProjects, visibleTodoTasks), [data.todoProjects, visibleTodoTasks]);
-  const coreProjectTodoGroups = useMemo(() => getCoreTodoGroups(projectTodoGroups), [projectTodoGroups]);
-  const otherProjectTodoGroups = useMemo(() => getOtherTodoGroups(projectTodoGroups), [projectTodoGroups]);
-  const visibleProjectTodoGroups = todoProjectPage === 'core' ? coreProjectTodoGroups : otherProjectTodoGroups;
+  const visibleProjectTodoGroups = projectTodoGroups;
   const monthCalendarDays = useMemo(() => buildMonthCalendarDays(now), [now]);
   const todoDeadlineDates = useMemo(() => new Set(visibleTodoTasks.map((task) => task.dueAt?.slice(0, 10)).filter(Boolean) as string[]), [visibleTodoTasks]);
   const todoDeadlineDots = useMemo(() => buildTodoDeadlineDots(visibleTodoTasks), [visibleTodoTasks]);
+  const scheduleRange = useMemo(() => getScheduleRange(data.settings ?? defaultSettings), [data.settings]);
 
   useEffect(() => {
     window.setTimeout(() => {
@@ -1033,7 +1578,7 @@ export function App() {
         const nowLine = schedule.querySelector<HTMLElement>('.now-line');
         const targetTop = nowLine
           ? nowLine.offsetTop - schedule.clientHeight / 3
-          : (7 / 24) * schedule.scrollHeight - 24;
+        : ((Math.max(0, 7 - scheduleRange.startHour) * 60) / scheduleRange.dayMinutes) * schedule.scrollHeight - 24;
         schedule.scrollTop = Math.max(0, targetTop);
       });
     }, 80);
@@ -1043,54 +1588,289 @@ export function App() {
     await commitInput();
   }
 
-  function startVoiceInput(options: { silent?: boolean } = {}) {
-    const SpeechRecognition = (window as WindowWithSpeech).SpeechRecognition ?? (window as WindowWithSpeech).webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      setMessage('这个浏览器暂时没有语音识别，先用输入框记录。');
+  function setDesktopCatState(state: 'sleeping' | 'listening' | 'thinking' | 'error') {
+    (window as WindowWithDesktopBridge).yayaDesktop?.setCatState(state);
+  }
+
+  function logDesktopVoiceEvent(detail: Record<string, unknown>) {
+    (window as WindowWithDesktopBridge).yayaDesktop?.logVoiceEvent?.(detail);
+  }
+
+  function createDesktopDialogMessage(role: DesktopCatDialogMessage['role'], text: string, muted = false): DesktopCatDialogMessage | null {
+    const value = text.trim();
+    if (!value) return null;
+    desktopDialogMessageIdRef.current += 1;
+    return { id: `desktop-dialog-${desktopDialogMessageIdRef.current}`, role, text: value, muted };
+  }
+
+  function resetDesktopDialogMessages(nextMessages: Array<DesktopCatDialogMessage | null> = []) {
+    setDesktopDialogMessages(nextMessages.filter((item): item is DesktopCatDialogMessage => Boolean(item)));
+  }
+
+  function appendDesktopDialogMessage(role: DesktopCatDialogMessage['role'], text: string, muted = false) {
+    const nextMessage = createDesktopDialogMessage(role, text, muted);
+    if (!nextMessage) return;
+    setDesktopDialogMessages((current) => {
+      const last = current[current.length - 1];
+      if (last?.role === nextMessage.role && last.text === nextMessage.text) return current;
+      return [...current, nextMessage].slice(-12);
+    });
+  }
+
+  function appendDesktopParseResult(result: ParseResult, fallbackText: string) {
+    const rewrittenText = result.transcription?.correctedText?.trim() || fallbackText.trim();
+    const assistantText = result.questions[0] || getDesktopParsePreviewMessage(result);
+    const hasActiveConversation = Boolean(pendingClarificationRef.current || pendingDecisionRef.current || parsePreviewRef.current);
+    const userMessage = createDesktopDialogMessage('user', rewrittenText);
+    const assistantMessage = createDesktopDialogMessage('assistant', assistantText);
+    if (hasActiveConversation) {
+      if (userMessage) appendDesktopDialogMessage(userMessage.role, userMessage.text, userMessage.muted);
+      if (assistantMessage) appendDesktopDialogMessage(assistantMessage.role, assistantMessage.text, assistantMessage.muted);
       return;
     }
+    resetDesktopDialogMessages([userMessage, assistantMessage]);
+  }
+
+  function getSpeechErrorName(error: unknown) {
+    return typeof error === 'object' && error !== null && 'error' in error ? String((error as { error?: unknown }).error ?? '') : '';
+  }
+
+  function clearVoiceTimers() {
+    if (voiceSilenceTimer.current) {
+      window.clearTimeout(voiceSilenceTimer.current);
+      voiceSilenceTimer.current = null;
+    }
+    if (voiceNoSpeechTimer.current) {
+      window.clearTimeout(voiceNoSpeechTimer.current);
+      voiceNoSpeechTimer.current = null;
+    }
+  }
+
+  function prepareNewVoiceSession() {
+    if (catStatusClearTimerRef.current) {
+      window.clearTimeout(catStatusClearTimerRef.current);
+      catStatusClearTimerRef.current = null;
+    }
+    setInput('');
+    inputRef.current = '';
+    setVoiceDisplayText('');
+    setCatProcessStatus('');
+    setMessage('');
+    setParsePreview(null);
+    setPendingPostCommit(null);
+  }
+
+  function updateVoiceText(text: string) {
+    const nextText = text.trim();
+    setInput(nextText);
+    setVoiceDisplayText(nextText);
+    inputRef.current = nextText;
+  }
+
+  function setCatStatus(status: string, autoClearMs?: number) {
+    if (catStatusClearTimerRef.current) {
+      window.clearTimeout(catStatusClearTimerRef.current);
+      catStatusClearTimerRef.current = null;
+    }
+    setCatProcessStatus(status);
+    if (autoClearMs) {
+      catStatusClearTimerRef.current = window.setTimeout(() => {
+        setCatProcessStatus('');
+        setVoiceDisplayText('');
+        catStatusClearTimerRef.current = null;
+      }, autoClearMs);
+    }
+  }
+
+  function focusSystemDictationInput(options: { clear?: boolean; retry?: boolean; notify?: boolean } = {}) {
+    const target = systemDictationInputRef.current;
+    const desktopBridge = (window as WindowWithDesktopBridge).yayaDesktop;
+    const shouldNotify = options.notify !== false;
+    if (!target) {
+      desktopBridge?.logVoiceEvent?.({ type: 'system-dictation-target-missing' });
+      if (shouldNotify) desktopBridge?.notifyDictationTargetReady?.({ voiceSessionId: voiceSessionIdRef.current, focused: false });
+      return false;
+    }
+
+    if (options.clear) target.value = '';
+    target.removeAttribute('tabindex');
+    target.focus({ preventScroll: true });
+    target.select();
+
+    const reportReady = () => {
+      const focused = document.activeElement === target;
+      desktopBridge?.logVoiceEvent?.({
+        type: 'system-dictation-target-ready',
+        focused,
+        activeTag: document.activeElement?.tagName ?? null
+      });
+      if (shouldNotify) desktopBridge?.notifyDictationTargetReady?.({ voiceSessionId: voiceSessionIdRef.current, focused });
+      return focused;
+    };
+
+    if (reportReady()) return true;
+    if (options.retry) {
+      window.setTimeout(() => {
+        target.focus({ preventScroll: true });
+        target.select();
+        reportReady();
+      }, 120);
+    }
+    return false;
+  }
+
+  function startVoiceInput(options: { silent?: boolean } = {}) {
+    if (isListeningRef.current) {
+      submitCurrentVoiceInput();
+      return;
+    }
+    const SpeechRecognition = (window as WindowWithSpeech).SpeechRecognition ?? (window as WindowWithSpeech).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      logDesktopVoiceEvent({
+        type: 'speech-api-unavailable',
+        hasSpeechRecognition: Boolean((window as WindowWithSpeech).SpeechRecognition),
+        hasWebkitSpeechRecognition: Boolean((window as WindowWithSpeech).webkitSpeechRecognition)
+      });
+      setMessage('这个浏览器暂时没有语音识别，先用输入框记录。');
+      setDesktopCatState('error');
+      window.setTimeout(() => setDesktopCatState('sleeping'), 1800);
+      return;
+    }
+    clearVoiceTimers();
+    voiceStopReasonRef.current = 'manual';
     recognitionRef.current?.stop();
-    if (voiceSilenceTimer.current) window.clearTimeout(voiceSilenceTimer.current);
+    const sessionId = voiceSessionIdRef.current + 1;
+    voiceSessionIdRef.current = sessionId;
+    voiceStopReasonRef.current = null;
+    voiceRecoverUntilRef.current = Date.now() + 10_000;
+    voiceRecoverAttemptsRef.current = 0;
+    voiceRestartPendingRef.current = false;
     const recognition = new SpeechRecognition();
     recognition.lang = 'zh-CN';
     recognition.continuous = true;
     recognition.interimResults = true;
     recognition.onresult = (event) => {
+      if (sessionId !== voiceSessionIdRef.current) return;
       let transcript = '';
       for (let index = 0; index < event.results.length; index += 1) {
         transcript += event.results[index][0].transcript;
       }
       const nextTranscript = transcript.trim();
-      setInput(nextTranscript);
-      inputRef.current = nextTranscript;
-      queueVoiceAutoSubmit();
+      if (!nextTranscript) return;
+      if (voiceNoSpeechTimer.current) {
+        window.clearTimeout(voiceNoSpeechTimer.current);
+        voiceNoSpeechTimer.current = null;
+      }
+      updateVoiceText(nextTranscript);
+      logDesktopVoiceEvent({
+        type: 'result',
+        sessionId,
+        transcriptLength: nextTranscript.length,
+        isFinal: Array.from(event.results).some((result) => result.isFinal)
+      });
     };
     recognition.onend = () => {
-      setIsListening(false);
-      if (voiceSilenceTimer.current) {
-        window.clearTimeout(voiceSilenceTimer.current);
-        voiceSilenceTimer.current = null;
+      if (sessionId !== voiceSessionIdRef.current) return;
+      const reason = voiceStopReasonRef.current;
+      logDesktopVoiceEvent({
+        type: 'end',
+        sessionId,
+        reason: reason ?? 'unexpected',
+        hasInput: Boolean(inputRef.current.trim())
+      });
+      if (!reason && isListeningRef.current && !inputRef.current.trim() && !voiceRestartPendingRef.current) {
+        voiceRestartPendingRef.current = true;
+        window.setTimeout(() => {
+          voiceRestartPendingRef.current = false;
+          if (sessionId !== voiceSessionIdRef.current || voiceStopReasonRef.current || inputRef.current.trim()) return;
+          try {
+            recognition.start();
+            logDesktopVoiceEvent({ type: 'restart-after-end', sessionId });
+          } catch {
+            stopVoiceInput('error');
+          }
+        }, 220);
+        return;
       }
-    };
-    recognition.onerror = () => {
       setIsListening(false);
-      setMessage('刚才没有听清，可以再点一下小猫。');
+      setDesktopCatState(reason === 'error' ? 'error' : 'sleeping');
+    };
+    recognition.onerror = (error) => {
+      if (sessionId !== voiceSessionIdRef.current) return;
+      const errorName = getSpeechErrorName(error);
+      console.warn('voice recognition error', error);
+      logDesktopVoiceEvent({
+        type: 'error',
+        sessionId,
+        errorName,
+        hasInput: Boolean(inputRef.current.trim())
+      });
+      if ((errorName === 'no-speech' || errorName === 'aborted') && !inputRef.current.trim()) return;
+      if (errorName === 'network' && !inputRef.current.trim() && Date.now() < voiceRecoverUntilRef.current && voiceRecoverAttemptsRef.current < 3) {
+        voiceRecoverAttemptsRef.current += 1;
+        voiceRestartPendingRef.current = true;
+        window.setTimeout(() => {
+          voiceRestartPendingRef.current = false;
+          if (sessionId !== voiceSessionIdRef.current || voiceStopReasonRef.current || inputRef.current.trim()) return;
+          try {
+            recognition.start();
+            logDesktopVoiceEvent({ type: 'restart-after-network', sessionId, attempt: voiceRecoverAttemptsRef.current });
+          } catch (retryError) {
+            logDesktopVoiceEvent({ type: 'restart-failed', sessionId, errorName: getSpeechErrorName(retryError) });
+            stopVoiceInput('error');
+          }
+        }, 420);
+        return;
+      }
+      stopVoiceInput('error');
+      if (errorName === 'not-allowed' || errorName === 'service-not-allowed') {
+        setMessage('麦克风权限没有打开，可以允许后再点小猫。');
+      } else if (errorName === 'audio-capture') {
+        setMessage('没有找到可用麦克风，检查一下设备再试。');
+      } else {
+        setMessage('刚才听写出错了，可以再点一下小猫。');
+      }
+      window.setTimeout(() => setDesktopCatState('sleeping'), 1800);
     };
     recognitionRef.current = recognition;
-    setInput('');
+    prepareNewVoiceSession();
     setIsListening(true);
-    if (!options.silent) setMessage('');
+    setDesktopCatState('listening');
+    logDesktopVoiceEvent({
+      type: 'ready',
+      sessionId,
+      hasSpeechRecognition: Boolean((window as WindowWithSpeech).SpeechRecognition),
+      hasWebkitSpeechRecognition: Boolean((window as WindowWithSpeech).webkitSpeechRecognition)
+    });
+    if (!options.silent) setMessage('我在听，你可以直接说。');
+    voiceNoSpeechTimer.current = window.setTimeout(() => {
+      if (sessionId !== voiceSessionIdRef.current || inputRef.current.trim()) return;
+      stopVoiceInput('idle-timeout');
+      const nowMs = Date.now();
+      if (nowMs - lastNoSpeechMessageAt.current > 8000) {
+        lastNoSpeechMessageAt.current = nowMs;
+        setMessage('刚才没听到声音，你准备好再点我。');
+      }
+    }, 12_000);
     try {
       recognition.start();
+      logDesktopVoiceEvent({ type: 'start', sessionId });
     } catch (error) {
-      setIsListening(false);
+      stopVoiceInput('error');
+      logDesktopVoiceEvent({ type: 'start-failed', sessionId, errorName: getSpeechErrorName(error) });
       console.warn('voice recognition start failed', error);
       if (!options.silent) setMessage('刚才没有打开听写，可以再点一下小猫。');
+      window.setTimeout(() => setDesktopCatState('sleeping'), 1800);
     }
   }
 
-  function restartVoiceInputSoon(delay = 360) {
+  function restartVoiceInputSoon(delay = 220) {
     window.setTimeout(() => {
+      const desktopBridge = (window as WindowWithDesktopBridge).yayaDesktop;
+      if (desktopBridge?.isDesktopShell && desktopBridge.requestVoiceInput) {
+        desktopBridge.requestVoiceInput();
+        return;
+      }
       startVoiceInput({ silent: true });
       window.setTimeout(() => {
         if (!isListeningRef.current) startVoiceInput({ silent: true });
@@ -1098,13 +1878,43 @@ export function App() {
     }, delay);
   }
 
-  function stopVoiceInput() {
-    if (voiceSilenceTimer.current) {
-      window.clearTimeout(voiceSilenceTimer.current);
-      voiceSilenceTimer.current = null;
-    }
-    recognitionRef.current?.stop();
+  function stopVoiceInput(reason: 'manual' | 'submit' | 'idle-timeout' | 'error' = 'manual') {
+    voiceStopReasonRef.current = reason;
+    clearVoiceTimers();
+    if (reason === 'manual') recognitionRef.current?.abort?.();
+    else recognitionRef.current?.stop();
     setIsListening(false);
+    setDesktopCatState(reason === 'error' ? 'error' : 'sleeping');
+  }
+
+  function cancelVoiceInteraction(nextMessage = '好，这次先取消。') {
+    stopVoiceInput('manual');
+    setIsThinking(false);
+    setInput('');
+    inputRef.current = '';
+    if (systemDictationInputRef.current) systemDictationInputRef.current.value = '';
+    setVoiceDisplayText('');
+    setCatProcessStatus('');
+    setParsePreview(null);
+    setPendingClarification(null);
+    setPendingDecision(null);
+    setPendingPostCommit(null);
+    setPendingModification(null);
+    resetDesktopDialogMessages();
+    setMessage(nextMessage);
+    setDesktopCatState('sleeping');
+    (window as WindowWithDesktopBridge).yayaDesktop?.setCatMessage?.(nextMessage);
+  }
+
+  async function submitCurrentVoiceInput() {
+    const text = inputRef.current.trim();
+    if (!text) {
+      stopVoiceInput('idle-timeout');
+      setMessage('刚才没听到声音，你准备好再点我。');
+      return;
+    }
+    stopVoiceInput('submit');
+    await parseVoiceInputForPreview(text);
   }
 
   function queueVoiceAutoSubmit() {
@@ -1112,31 +1922,106 @@ export function App() {
     voiceSilenceTimer.current = window.setTimeout(async () => {
       const text = inputRef.current.trim();
       if (!text) {
-        stopVoiceInput();
+        stopVoiceInput('idle-timeout');
         return;
       }
-      recognitionRef.current?.stop();
-      setIsListening(false);
-      const normalizedText = await normalizeVoiceTranscript(text);
-      if (normalizedText !== text) {
-        setInput(normalizedText);
-        inputRef.current = normalizedText;
-        await new Promise((resolve) => window.setTimeout(resolve, 360));
-      }
-      setIsThinking(true);
-      void commitInput(undefined, normalizedText, normalizedText !== text ? 'text' : 'voice');
-    }, 1000);
+      await submitCurrentVoiceInput();
+    }, 1800);
   }
 
-  async function normalizeVoiceTranscript(text: string) {
-    const response = await fetch('/api/input/parse', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, source: 'voice' })
+  async function parseVoiceInputForPreview(text: string) {
+    logDesktopVoiceEvent({
+      type: 'parse-preview-start',
+      length: text.trim().length,
+      preview: text.trim().slice(0, 36)
     });
-    if (!response.ok) return text;
-    const result = (await response.json()) as ParseResult;
-    return result.transcription?.correctedText?.trim() || text;
+    setIsThinking(true);
+    setParsePreview(null);
+    setCatStatus('文字整理中');
+    setMessage('');
+    try {
+      const response = await fetch('/api/input/parse', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, source: 'voice' })
+      });
+      setIsThinking(false);
+      if (!response.ok) {
+        logDesktopVoiceEvent({
+          type: 'parse-preview-http-error',
+          status: response.status,
+          statusText: response.statusText
+        });
+        setMessage('这句还没理解出来，可以再说一遍。');
+        return null;
+      }
+      const result = (await response.json()) as ParseResult;
+      const rewrittenText = result.transcription?.correctedText?.trim() || text;
+      logDesktopVoiceEvent({
+        type: 'parse-preview-success',
+        intent: result.intent,
+        confidence: result.confidence,
+        rewrittenLength: rewrittenText.length,
+        rewrittenPreview: rewrittenText.slice(0, 36),
+        hasQuestions: result.questions.length > 0
+      });
+      updateVoiceText(rewrittenText);
+      appendDesktopParseResult(result, rewrittenText);
+      setCatStatus(result.needsConfirmation || result.questions.length ? '' : '安排事项中');
+      if (result.questions.length && getConflictOptions(result).length === 0) {
+        setPendingClarification(result);
+        setParsePreview(null);
+      } else {
+        setPendingClarification(null);
+        setParsePreview(result);
+      }
+      setMessage(result.needsConfirmation || result.questions.length ? '' : '我整理好了，你看一下确认卡片。');
+      if (isDesktopShell && shouldAutoCommitDesktopVoicePreview(result)) {
+        logDesktopVoiceEvent({
+          type: 'desktop-auto-commit-start',
+          intent: result.intent,
+          textLength: rewrittenText.length,
+          preview: rewrittenText.slice(0, 36)
+        });
+        setCatStatus('安排事项中');
+        setMessage('');
+        await commitInput(undefined, rewrittenText, 'voice');
+      } else if (isDesktopShell && (result.needsConfirmation || result.questions.length)) {
+        restartVoiceInputSoon(120);
+      }
+      return result;
+    } catch (error) {
+      setIsThinking(false);
+      logDesktopVoiceEvent({
+        type: 'parse-preview-error',
+        message: error instanceof Error ? error.message : String(error)
+      });
+      setMessage('这句还没理解出来，可以再说一遍。');
+      return null;
+    }
+  }
+
+  async function handleDesktopRecognizedText(text: string) {
+    const rawText = text.trim();
+    logDesktopVoiceEvent({
+      type: 'desktop-recognized-text',
+      length: rawText.length,
+      preview: rawText.slice(0, 36)
+    });
+    if (!rawText) {
+      setMessage('刚才没听到声音，你准备好再点我。');
+      return;
+    }
+    updateVoiceText(rawText);
+    setMessage('');
+    const activeClarification = pendingClarificationRef.current;
+    const activePreview = parsePreviewRef.current;
+    if (activeClarification || activePreview?.questions.length) {
+      appendDesktopDialogMessage('user', rawText);
+      await commitInput(undefined, rawText, 'voice');
+      return;
+    }
+    await parseVoiceInputForPreview(rawText);
   }
 
   async function commitInput(selectedOptionId?: string, inputOverride?: string, sourceOverride: 'voice' | 'text' | 'manual' = 'voice') {
@@ -1144,6 +2029,16 @@ export function App() {
     const activeDecision = selectedOptionId ? pendingDecisionRef.current : null;
     const text = buildInputForCommit((inputOverride ?? input).trim(), activeClarification, activeDecision);
     if (!text) return;
+    logDesktopVoiceEvent({
+      type: 'commit-start',
+      source: sourceOverride,
+      selectedOptionId: selectedOptionId ?? null,
+      textLength: text.length,
+      preview: text.slice(0, 36)
+    });
+    setIsThinking(true);
+    setCatStatus('安排事项中');
+    setMessage('');
 
     if (!activeClarification && !activeDecision && !selectedOptionId && pendingModification) {
       await applyPostCommitModification(pendingModification, text);
@@ -1172,18 +2067,32 @@ export function App() {
     const result = response.ok ? ((await response.json()) as CommitResponse) : null;
 
     if (response.ok && result?.ok) {
-      setIsThinking(false);
+      logDesktopVoiceEvent({
+        type: 'commit-success',
+        intent: result.parseResult?.intent ?? null,
+        resolvedBy: result.resolvedBy ?? null,
+        feedback: result.feedback ?? null
+      });
       setInput('');
       inputRef.current = '';
       setParsePreview(null);
       setPendingClarification(null);
       setPendingDecision(null);
+      resetDesktopDialogMessages();
       const nextAction = createPostCommitAction(result);
       setPendingPostCommit(nextAction);
       setMessage(nextAction ? '' : getCommitMessage(result.parseResult, result.resolvedBy, result.feedback));
       await refreshData();
       if (nextAction) focusWrittenAction(nextAction);
+      setIsThinking(false);
+      setCatStatus('完成了', 5000);
     } else if (result?.needsConfirmation) {
+      logDesktopVoiceEvent({
+        type: 'commit-needs-confirmation',
+        intent: result.parseResult?.intent ?? null,
+        feedback: result.feedback ?? null,
+        optionCount: result.parseResult ? getConflictOptions(result.parseResult).length : 0
+      });
       setIsThinking(false);
       const nextParse = result.parseResult ?? null;
       if (nextParse && getConflictOptions(nextParse).length === 0) {
@@ -1191,15 +2100,22 @@ export function App() {
         setParsePreview(null);
         setInput('');
         inputRef.current = '';
+        appendDesktopDialogMessage('assistant', nextParse.questions[0] || getCommitMessage(result.parseResult, undefined, result.feedback));
         restartVoiceInputSoon();
       } else {
         setPendingClarification(null);
         setPendingDecision(nextParse);
         setParsePreview(null);
         setInput('');
+        appendDesktopDialogMessage('assistant', getCommitMessage(result.parseResult, undefined, result.feedback));
       }
       setMessage(getCommitMessage(result.parseResult, undefined, result.feedback));
     } else {
+      logDesktopVoiceEvent({
+        type: 'commit-failed',
+        httpOk: response.ok,
+        feedback: result?.feedback ?? null
+      });
       setIsThinking(false);
       setMessage('这条还没记上，等下再试一次。');
     }
@@ -1216,6 +2132,19 @@ export function App() {
       return;
     }
     void commitInput(optionId);
+  }
+
+  function handleDesktopBubbleOption(optionId: string) {
+    const activeDecision = pendingDecisionRef.current;
+    const activePreview = activeDecision ?? parsePreviewRef.current ?? pendingClarificationRef.current;
+    const fallbackText = activePreview?.rawText || inputRef.current.trim() || '确认当前草稿';
+    logDesktopVoiceEvent({
+      type: 'bubble-option',
+      optionId,
+      hasActiveDecision: Boolean(activeDecision),
+      hasActivePreview: Boolean(activePreview)
+    });
+    void commitInput(optionId, fallbackText, 'manual');
   }
 
   async function commitQuickProgress(text: string) {
@@ -1263,10 +2192,42 @@ export function App() {
     ) {
       return;
     }
+    setSelectedDetail(item);
+    setSelectedLog(null);
+    setLogDraft(null);
+  }
+
+  function editDetailFromRow(event: ReactMouseEvent<HTMLElement>, item: DetailTarget) {
+    const target = event.target;
+    if (
+      target instanceof HTMLElement &&
+      target.closest('button, input, textarea, select, .detail-editor, .detail-actions')
+    ) {
+      return;
+    }
     openDetail(item);
   }
 
   async function deleteItem(item: DetailTarget) {
+    if (item.isDraft && item.draftId) {
+      removeDraftFromView(item.draftId);
+      setSelectedDetail(null);
+      setDetailDraft(null);
+      setMessage('草稿已取消，没有写入正式数据。');
+      const response = await fetch('/api/input/commit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: item.rawText || item.title, source: 'manual', selectedOptionId: `cancel-draft:${item.draftId}` })
+      });
+      if (response.ok) {
+        void refreshData();
+      } else {
+        setMessage('草稿取消没有成功，等下再试一次。');
+        await refreshData();
+      }
+      return;
+    }
+
     if (item.kind === 'task') removeTaskFromView(item.id);
     else removeEventFromView(item.id);
     setSelectedDetail(null);
@@ -1284,21 +2245,28 @@ export function App() {
 
   async function saveItemDraft() {
     if (!selectedDetail || !detailDraft) return;
-    const path = selectedDetail.kind === 'task' ? `/api/tasks/${selectedDetail.id}` : `/api/events/${selectedDetail.id}`;
+    if (detailSaveInFlightRef.current) return;
+    detailSaveInFlightRef.current = true;
+    const activeDetail = selectedDetail;
+    const draft = detailDraft;
+    const path = activeDetail.kind === 'task' ? `/api/tasks/${activeDetail.id}` : `/api/events/${activeDetail.id}`;
     const body =
-      selectedDetail.kind === 'task'
+      activeDetail.kind === 'task'
         ? {
-            title: detailDraft.title,
-            dueAt: combineLocalDateTime(detailDraft.dueDate, detailDraft.dueTime),
-            estimatedMinutes: detailDraft.estimatedMinutes ? Number(detailDraft.estimatedMinutes) : null,
-            preparations: splitPreparations(detailDraft.preparationsText)
+            title: draft.title,
+            notes: draft.notes,
+            dueAt: combineLocalDateTime(draft.dueDate, draft.dueTime),
+            estimatedMinutes: draft.estimatedMinutes ? Number(draft.estimatedMinutes) : null,
+            preparations: splitPreparations(draft.preparationsText)
           }
         : {
-            title: detailDraft.title,
-            preparations: splitPreparations(detailDraft.preparationsText),
-            date: detailDraft.date,
-            startAt: combineLocalDateTime(detailDraft.date, detailDraft.startTime),
-            endAt: combineLocalDateTime(detailDraft.date, detailDraft.endTime)
+            title: draft.title,
+            notes: draft.notes,
+            purpose: draft.purpose,
+            preparations: splitPreparations(draft.preparationsText),
+            date: draft.date,
+            startAt: combineLocalDateTime(draft.date, draft.startTime),
+            endAt: combineLocalDateTime(draft.date, draft.endTime)
           };
     const response = await fetch(path, {
       method: 'PATCH',
@@ -1313,6 +2281,7 @@ export function App() {
     } else {
       setMessage('修改没有成功，等下再试一次。');
     }
+    detailSaveInFlightRef.current = false;
   }
 
   function openLog(log: CalendarLog) {
@@ -1433,7 +2402,6 @@ export function App() {
     if (response.ok) {
       const result = (await response.json()) as { project?: TodoProject };
       if (result.project) {
-        setTodoProjectPage('other');
         setEditingProjectId(result.project.id);
         setProjectTitleDraft(result.project.title);
       }
@@ -1503,7 +2471,11 @@ export function App() {
   }
 
   async function deleteTodoProject(project: TodoProject) {
-    if (project.id === 'uncategorized') return;
+    setTodoContextMenu(null);
+    if (isUncategorizedTodoProject(project)) {
+      setMessage('未归类是兜底收纳区，不能删除。');
+      return;
+    }
     removeTodoProjectFromView(project.id);
     setMessage('项目分类已删除，原有待办已移到未归类。');
     const response = await fetch(`/api/todo-projects/${project.id}`, { method: 'DELETE' });
@@ -1530,29 +2502,55 @@ export function App() {
     }, 60);
   }
 
+  function cancelBlankNewTodoTask(projectId: string) {
+    const draft = newTaskDraftByProject[projectId];
+    if (draft?.title.trim() || draft?.notes.trim()) return;
+    setActiveNewTaskProjectId((current) => (current === projectId ? null : current));
+    setNewTaskDraftByProject((drafts) => {
+      const next = { ...drafts };
+      delete next[projectId];
+      return next;
+    });
+  }
+
+  async function finishNewTodoTaskDraft(projectId: string) {
+    const draft = newTaskDraftByProject[projectId];
+    if (!draft?.title.trim()) {
+      cancelBlankNewTodoTask(projectId);
+      return;
+    }
+    await createTodoTaskFromProject(projectId);
+  }
+
   async function createTodoTaskFromProject(projectId: string) {
+    if (savingNewTaskProjectIds.current.has(projectId)) return;
     const draft = newTaskDraftByProject[projectId] ?? { title: '', notes: '', projectId };
     const title = draft.title.trim();
     if (!title) {
-      setMessage('待办内容还空着。');
+      cancelBlankNewTodoTask(projectId);
       return;
     }
-    const response = await fetch('/api/tasks', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        title,
-        notes: draft.notes.trim() || undefined,
-        projectId: projectId === 'uncategorized' ? null : projectId
-      })
-    });
-    if (response.ok) {
-      setNewTaskDraftByProject((drafts) => ({ ...drafts, [projectId]: { title: '', notes: '', projectId } }));
-      setActiveNewTaskProjectId(null);
-      setMessage('待办加好了。');
-      await refreshData();
-    } else {
-      setMessage('待办没有加上，稍后再试。');
+    savingNewTaskProjectIds.current.add(projectId);
+    try {
+      const response = await fetch('/api/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title,
+          notes: draft.notes.trim() || undefined,
+          projectId: projectId === 'uncategorized' ? null : projectId
+        })
+      });
+      if (response.ok) {
+        setNewTaskDraftByProject((drafts) => ({ ...drafts, [projectId]: { title: '', notes: '', projectId } }));
+        setActiveNewTaskProjectId(null);
+        setMessage('待办加好了。');
+        await refreshData();
+      } else {
+        setMessage('待办没有加上，稍后再试。');
+      }
+    } finally {
+      savingNewTaskProjectIds.current.delete(projectId);
     }
   }
 
@@ -1595,6 +2593,7 @@ export function App() {
   }
 
   async function deleteTodoTask(task: TaskListItem) {
+    setTodoContextMenu(null);
     removeTaskFromView(task.id);
     setEditingTodoTaskId((current) => (current === task.id ? null : current));
     setMessage('待办已删除。');
@@ -1607,15 +2606,46 @@ export function App() {
     }
   }
 
+  function openTodoProjectContextMenu(event: ReactMouseEvent<HTMLElement>, project: TodoProject) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (isUncategorizedTodoProject(project)) {
+      setMessage('未归类是兜底收纳区，不能删除。');
+      setTodoContextMenu(null);
+      return;
+    }
+    setTodoContextMenu({ kind: 'project', project, x: event.clientX, y: event.clientY });
+  }
+
+  function openTodoTaskContextMenu(event: ReactMouseEvent<HTMLElement>, task: TaskListItem) {
+    event.preventDefault();
+    event.stopPropagation();
+    setTodoContextMenu({ kind: 'task', task, x: event.clientX, y: event.clientY });
+  }
+
+  function openDetailContextMenu(event: ReactMouseEvent<HTMLElement>, item: DetailTarget) {
+    event.preventDefault();
+    event.stopPropagation();
+    setSelectedDetail(item);
+    setSelectedLog(null);
+    setDetailDraft(null);
+    setDetailContextMenu({ item, x: event.clientX, y: event.clientY });
+  }
+
   async function moveTodoTaskToProject(task: TaskListItem, projectId: string) {
-    if (task.projectId === projectId) return;
+    if ((task.projectId || 'uncategorized') === projectId) {
+      clearTodoDragState();
+      return;
+    }
+    const targetTasks = visibleTodoTasks.filter((item) => (item.projectId || 'uncategorized') === projectId && item.status !== 'cancelled');
+    patchTodoTaskInView(task.id, { projectId });
     const response = await fetch(`/api/tasks/${task.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ projectId: projectId === 'uncategorized' ? null : projectId })
+      body: JSON.stringify({ projectId: projectId === 'uncategorized' ? null : projectId, order: targetTasks.length + 1 })
     });
     if (response.ok) {
-      setDraggedTodoTaskId(null);
+      clearTodoDragState();
       setMessage('待办已移动到新的项目。');
       await refreshDataWithTransition();
     } else {
@@ -1652,15 +2682,234 @@ export function App() {
     }
   }
 
-  function startTodoDrag(event: { dataTransfer: DataTransfer }, task: TaskListItem) {
+  function shouldIgnoreTodoDragTarget(target: EventTarget | null) {
+    return target instanceof HTMLElement && Boolean(target.closest('button, input, textarea, select, [contenteditable="true"]'));
+  }
+
+  function armTodoDrag(event: ReactMouseEvent<HTMLElement>, kind: TodoDragKind, id: string) {
+    if (event.button !== 0) return;
+    if (shouldIgnoreTodoDragTarget(event.target)) return;
+    window.getSelection()?.removeAllRanges();
+    if (todoLongPressTimerRef.current) window.clearTimeout(todoLongPressTimerRef.current);
+    window.addEventListener(
+      'mouseup',
+      () => {
+        if (!todoLongPressTimerRef.current) return;
+        window.clearTimeout(todoLongPressTimerRef.current);
+        todoLongPressTimerRef.current = null;
+      },
+      { once: true }
+    );
+    todoLongPressTimerRef.current = window.setTimeout(() => {
+      todoLongPressTimerRef.current = null;
+      isNativeTodoDraggingRef.current = true;
+      window.getSelection()?.removeAllRanges();
+      setTodoDragReady({ kind, id });
+      if (kind === 'task') {
+        setDraggedTodoTaskId(id);
+        setDraggedTodoProjectId(null);
+      } else {
+        setDraggedTodoProjectId(id);
+        setDraggedTodoTaskId(null);
+      }
+      setTodoDropPreview(null);
+    }, 260);
+  }
+
+  function disarmTodoDragIfIdle() {
+    if (todoLongPressTimerRef.current) {
+      window.clearTimeout(todoLongPressTimerRef.current);
+      todoLongPressTimerRef.current = null;
+    }
+    if (!isNativeTodoDraggingRef.current) {
+      setDraggedTodoTaskId(null);
+      setDraggedTodoProjectId(null);
+      setTodoDragReady(null);
+      setTodoDropPreview(null);
+    }
+  }
+
+  function getDropPosition(event: { currentTarget: HTMLElement; clientY: number }): 'before' | 'after' {
+    return getElementDropPosition(event.currentTarget, event.clientY);
+  }
+
+  function getElementDropPosition(element: HTMLElement, clientY: number): 'before' | 'after' {
+    const rect = element.getBoundingClientRect();
+    return clientY > rect.top + rect.height / 2 ? 'after' : 'before';
+  }
+
+  function startTodoDrag(event: { dataTransfer: DataTransfer; preventDefault: () => void }, task: TaskListItem) {
+    if (todoDragReady?.kind !== 'task' || todoDragReady.id !== task.id) {
+      event.preventDefault();
+      return;
+    }
+    isNativeTodoDraggingRef.current = true;
     setDraggedTodoTaskId(task.id);
+    setTodoDropPreview(null);
     event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('application/x-yayamind-todo-task', task.id);
     event.dataTransfer.setData('text/plain', task.id);
   }
 
   function getDraggedTodoTask(event: { dataTransfer: DataTransfer }) {
-    const id = event.dataTransfer.getData('text/plain') || draggedTodoTaskId;
+    const id = event.dataTransfer.getData('application/x-yayamind-todo-task') || event.dataTransfer.getData('text/plain') || draggedTodoTaskId;
     return data.tasks.find((item) => item.id === id) ?? null;
+  }
+
+  function startTodoProjectDrag(event: { dataTransfer: DataTransfer; target: EventTarget; preventDefault: () => void }, project: TodoProject) {
+    if (project.id === 'uncategorized') {
+      event.preventDefault();
+      return;
+    }
+    if (todoDragReady?.kind !== 'project' || todoDragReady.id !== project.id) {
+      event.preventDefault();
+      return;
+    }
+    if (event.target instanceof HTMLElement && event.target.closest('button, input, textarea, select')) {
+      event.preventDefault();
+      return;
+    }
+    isNativeTodoDraggingRef.current = true;
+    setDraggedTodoProjectId(project.id);
+    setTodoDropPreview(null);
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('application/x-yayamind-todo-project', project.id);
+  }
+
+  function getDraggedTodoProject(event: { dataTransfer: DataTransfer }) {
+    const id = event.dataTransfer.getData('application/x-yayamind-todo-project') || draggedTodoProjectId;
+    return data.todoProjects.find((project) => project.id === id) ?? null;
+  }
+
+  function getClosestTaskDropTarget(groupElement: HTMLElement, clientY: number) {
+    const taskElements = Array.from(groupElement.querySelectorAll<HTMLElement>('.project-todo-item'));
+    if (!taskElements.length) return null;
+    return taskElements.reduce<{ element: HTMLElement; distance: number } | null>((closest, element) => {
+      const rect = element.getBoundingClientRect();
+      const center = rect.top + rect.height / 2;
+      const distance = Math.abs(clientY - center);
+      if (!closest || distance < closest.distance) return { element, distance };
+      return closest;
+    }, null)?.element ?? null;
+  }
+
+  function getTodoDropPreviewFromPoint(clientX: number, clientY: number): TodoDropPreview | null {
+    const element = document.elementFromPoint(clientX, clientY);
+    if (!(element instanceof HTMLElement)) return null;
+
+    if (draggedTodoTaskId) {
+      const dateElement = element.closest<HTMLElement>('[data-todo-date]');
+      const targetDate = dateElement?.dataset.todoDate;
+      if (targetDate) return { kind: 'date', targetId: targetDate };
+    }
+
+    const groupElement = element.closest<HTMLElement>('.project-todo-group');
+    const projectId = groupElement?.dataset.projectId;
+    if (!groupElement || !projectId) return null;
+
+    if (draggedTodoTaskId) {
+      const draggedTask = data.tasks.find((item) => item.id === draggedTodoTaskId);
+      const taskElement = element.closest<HTMLElement>('.project-todo-item') ?? getClosestTaskDropTarget(groupElement, clientY);
+      const targetTaskId = taskElement?.dataset.taskId;
+      if (draggedTask && targetTaskId && (draggedTask.projectId || 'uncategorized') === projectId) {
+        return { kind: 'task', targetId: targetTaskId, position: getElementDropPosition(taskElement, clientY) };
+      }
+      return { kind: 'project-end', targetId: projectId };
+    }
+
+    if (draggedTodoProjectId && projectId !== draggedTodoProjectId && projectId !== 'uncategorized') {
+      return { kind: 'project', targetId: projectId, position: getElementDropPosition(groupElement, clientY) };
+    }
+
+    return null;
+  }
+
+  async function commitTodoDropPreview(preview: TodoDropPreview | null) {
+    if (!preview) {
+      clearTodoDragState();
+      return;
+    }
+    if (draggedTodoTaskId) {
+      const task = data.tasks.find((item) => item.id === draggedTodoTaskId);
+      if (!task) {
+        clearTodoDragState();
+        return;
+      }
+      if (preview.kind === 'project-end') {
+        await moveTodoTaskToProject(task, preview.targetId);
+        return;
+      }
+      if (preview.kind === 'task') {
+        const targetTask = data.tasks.find((item) => item.id === preview.targetId);
+        if (!targetTask || targetTask.id === task.id) {
+          clearTodoDragState();
+          return;
+        }
+        await moveTodoTaskRelative(task, targetTask, targetTask.projectId || 'uncategorized', preview.position);
+        return;
+      }
+      if (preview.kind === 'date') {
+        await assignTodoDeadline(task, preview.targetId);
+        return;
+      }
+    }
+    if (draggedTodoProjectId && preview.kind === 'project') {
+      const project = data.todoProjects.find((item) => item.id === draggedTodoProjectId);
+      const targetProject = data.todoProjects.find((item) => item.id === preview.targetId);
+      if (project && targetProject) {
+        await moveTodoProjectRelative(project, targetProject, preview.position);
+        return;
+      }
+    }
+    clearTodoDragState();
+  }
+
+  async function moveTodoProjectRelative(project: TodoProject, targetProject: TodoProject, position: 'before' | 'after') {
+    if (project.id === targetProject.id || project.id === 'uncategorized' || targetProject.id === 'uncategorized') return;
+    const orderedProjects = [...data.todoProjects].sort(compareTodoProjects);
+    const fromIndex = orderedProjects.findIndex((item) => item.id === project.id);
+    const toIndex = orderedProjects.findIndex((item) => item.id === targetProject.id);
+    if (fromIndex < 0 || toIndex < 0) return;
+    const [moved] = orderedProjects.splice(fromIndex, 1);
+    const targetIndex = orderedProjects.findIndex((item) => item.id === targetProject.id);
+    orderedProjects.splice(position === 'after' ? targetIndex + 1 : targetIndex, 0, moved);
+    reorderTodoProjectsInView(project.id, targetProject.id, position);
+    clearTodoDragState();
+    await Promise.all(
+      orderedProjects.map((item, index) =>
+        fetch(`/api/todo-projects/${item.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ order: index + 1 })
+        })
+      )
+    );
+    await refreshDataWithTransition();
+  }
+
+  async function moveTodoTaskRelative(task: TaskListItem, targetTask: TaskListItem, targetProjectId: string, position: 'before' | 'after') {
+    if (task.id === targetTask.id) return;
+    const nextProjectId = targetProjectId === 'uncategorized' ? 'uncategorized' : targetProjectId;
+    const siblingTasks = visibleTodoTasks
+      .filter((item) => item.id !== task.id && (item.projectId || 'uncategorized') === nextProjectId && item.status !== 'cancelled')
+      .sort(compareTodoTasks);
+    const targetIndex = Math.max(0, siblingTasks.findIndex((item) => item.id === targetTask.id));
+    siblingTasks.splice(position === 'after' ? targetIndex + 1 : targetIndex, 0, { ...task, projectId: nextProjectId });
+    reorderTodoTasksInView(task.id, targetTask.id, nextProjectId, position);
+    clearTodoDragState();
+    await Promise.all(
+      siblingTasks.map((item, index) =>
+        fetch(`/api/tasks/${item.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            projectId: item.id === task.id ? (nextProjectId === 'uncategorized' ? null : nextProjectId) : undefined,
+            order: index + 1
+          })
+        })
+      )
+    );
+    await refreshDataWithTransition();
   }
 
   async function generateSummary(kind: 'daily' | 'weekly') {
@@ -1675,6 +2924,87 @@ export function App() {
       setMessage('Markdown 总结已经写回本地。');
     } else {
       setSummaryMessage('总结生成失败，稍后再试。');
+    }
+  }
+
+  function updateSettingsDraft(patch: Partial<SettingsDraft>) {
+    setSettingsMessage('');
+    setSettingsDirty(true);
+    setSettingsDraft((draft) => ({ ...draft, ...patch }));
+  }
+
+  async function saveSettingsDraft() {
+    const response = await fetch('/api/settings', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ui: {
+          dayStartHour: 0,
+          dayEndHour: 24
+        },
+        habits: {
+          wakeUp: settingsDraft.wakeUp,
+          sleepStart: settingsDraft.sleepStart,
+          restDayMode: settingsDraft.restDayMode,
+          showLegalHolidays: settingsDraft.showLegalHolidays
+        },
+        ai: {
+          provider: settingsDraft.aiProvider,
+          enabled: settingsDraft.aiEnabled,
+          baseUrl: settingsDraft.aiBaseUrl.trim(),
+          model: settingsDraft.aiModel.trim(),
+          apiKey: settingsDraft.aiApiKey.trim()
+        }
+      })
+    });
+    if (response.ok) {
+      setSettingsDirty(false);
+      setSettingsMessage('设置已经保存。');
+      await refreshData();
+    } else {
+      setSettingsMessage('设置没有保存成功，稍后再试一次。');
+    }
+  }
+
+  function startManualEventDraft(date: string) {
+    const startHour = Math.max(0, Math.min(23, scheduleRange.startHour));
+    setManualEventDraft({
+      title: '',
+      date,
+      startTime: `${String(startHour).padStart(2, '0')}:00`,
+      endTime: `${String(Math.min(23, startHour + 1)).padStart(2, '0')}:00`,
+      type: 'other',
+      notes: '',
+      preparationsText: ''
+    });
+  }
+
+  async function saveManualEventDraft() {
+    if (!manualEventDraft) return;
+    const title = manualEventDraft.title.trim() || '新日程';
+    const response = await fetch('/api/events', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title,
+        date: manualEventDraft.date,
+        startAt: manualEventDraft.startTime,
+        endAt: manualEventDraft.endTime,
+        type: manualEventDraft.type,
+        notes: manualEventDraft.notes,
+        preparations: splitListText(manualEventDraft.preparationsText)
+      })
+    });
+    if (response.ok) {
+      setMessage('日程已经加好了。');
+      const date = manualEventDraft.date;
+      const startAt = `${manualEventDraft.date}T${manualEventDraft.startTime}:00+08:00`;
+      setManualEventDraft(null);
+      setSelectedDate(date);
+      await refreshData();
+      scrollScheduleToTime(date, startAt);
+    } else {
+      setMessage('这条日程没有保存成功，稍后再试。');
     }
   }
 
@@ -1724,15 +3054,15 @@ export function App() {
     const rect = schedule.getBoundingClientRect();
     const start = new Date(item.startAt);
     const end = new Date(item.endAt);
-    const originalStart = getMinutesFromDayStart(start);
-    const originalEnd = getMinutesFromDayStart(end);
+    const originalStart = getMinutesFromDayStart(start, scheduleRange);
+    const originalEnd = getMinutesFromDayStart(end, scheduleRange);
     const duration = Math.max(30, originalEnd - originalStart);
-    const pointerStartMinute = minuteFromClientY(event.clientY, rect);
+    const pointerStartMinute = minuteFromClientY(event.clientY, rect, scheduleRange);
     let moved = false;
 
     async function saveAdjusted(nextStartMinute: number, nextEndMinute: number) {
-      const startAt = makeLocalDateTime(date, nextStartMinute);
-      const endAt = makeLocalDateTime(date, nextEndMinute);
+      const startAt = makeLocalDateTime(date, nextStartMinute, scheduleRange);
+      const endAt = makeLocalDateTime(date, nextEndMinute, scheduleRange);
       const response = await fetch(`/api/events/${item.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -1750,26 +3080,26 @@ export function App() {
 
     function moveEvent(moveEvent: MouseEvent) {
       moved = true;
-      const currentMinute = minuteFromClientY(moveEvent.clientY, rect);
+      const currentMinute = minuteFromClientY(moveEvent.clientY, rect, scheduleRange);
       const delta = snapToHalfHour(currentMinute - pointerStartMinute);
       let nextStart = originalStart;
       let nextEnd = originalEnd;
       if (mode === 'move') {
-        nextStart = clampMinute(snapToHalfHour(originalStart + delta));
+        nextStart = clampMinute(snapToHalfHour(originalStart + delta), scheduleRange);
         nextEnd = nextStart + duration;
-        if (nextEnd > dayMinutes) {
-          nextEnd = dayMinutes;
+        if (nextEnd > scheduleRange.dayMinutes) {
+          nextEnd = scheduleRange.dayMinutes;
           nextStart = Math.max(0, nextEnd - duration);
         }
       }
       if (mode === 'resize-start') {
-        nextStart = clampMinute(Math.min(originalEnd - 30, snapToHalfHour(currentMinute)));
+        nextStart = clampMinute(Math.min(originalEnd - 30, snapToHalfHour(currentMinute)), scheduleRange);
       }
       if (mode === 'resize-end') {
-        nextEnd = clampMinute(Math.max(originalStart + 30, snapToHalfHour(currentMinute)));
+        nextEnd = clampMinute(Math.max(originalStart + 30, snapToHalfHour(currentMinute)), scheduleRange);
       }
-      const previewStart = makeLocalDateTime(date, nextStart);
-      const previewEnd = makeLocalDateTime(date, nextEnd);
+      const previewStart = makeLocalDateTime(date, nextStart, scheduleRange);
+      const previewEnd = makeLocalDateTime(date, nextEnd, scheduleRange);
       setDragPreview({ id: item.id, startAt: previewStart, endAt: previewEnd });
       setSelectedDetail((current) =>
         current?.id === item.id ? { ...current, startAt: previewStart, endAt: previewEnd, date, kind: 'event' } : current
@@ -1783,21 +3113,21 @@ export function App() {
         setDragPreview(null);
         return;
       }
-      const currentMinute = minuteFromClientY(stopEvent.clientY, rect);
+      const currentMinute = minuteFromClientY(stopEvent.clientY, rect, scheduleRange);
       const delta = snapToHalfHour(currentMinute - pointerStartMinute);
       let nextStart = originalStart;
       let nextEnd = originalEnd;
       if (mode === 'move') {
-        nextStart = clampMinute(snapToHalfHour(originalStart + delta));
+        nextStart = clampMinute(snapToHalfHour(originalStart + delta), scheduleRange);
         nextEnd = nextStart + duration;
-        if (nextEnd > dayMinutes) {
-          nextEnd = dayMinutes;
+        if (nextEnd > scheduleRange.dayMinutes) {
+          nextEnd = scheduleRange.dayMinutes;
           nextStart = Math.max(0, nextEnd - duration);
         }
       } else if (mode === 'resize-start') {
-        nextStart = clampMinute(Math.min(originalEnd - 30, snapToHalfHour(currentMinute)));
+        nextStart = clampMinute(Math.min(originalEnd - 30, snapToHalfHour(currentMinute)), scheduleRange);
       } else {
-        nextEnd = clampMinute(Math.max(originalStart + 30, snapToHalfHour(currentMinute)));
+        nextEnd = clampMinute(Math.max(originalStart + 30, snapToHalfHour(currentMinute)), scheduleRange);
       }
       void saveAdjusted(nextStart, nextEnd);
     }
@@ -1813,7 +3143,7 @@ export function App() {
 
     function movePanel(moveEvent: MouseEvent) {
       const nextWidth = startWidth - (moveEvent.clientX - startX);
-      setRightPanelWidth(Math.min(460, Math.max(280, nextWidth)));
+      setRightPanelWidth(Math.min(460, Math.max(240, nextWidth)));
     }
 
     function stopPanelResize() {
@@ -1844,6 +3174,10 @@ export function App() {
 
   function renderInlineDetailEditor(item: DetailTarget) {
     if (!detailDraft || selectedDetail?.id !== item.id || selectedDetail.kind !== item.kind) return null;
+    const contentRows = getTextEditorRows(detailDraft.purpose, 20);
+    const titleRows = getTextEditorRows(detailDraft.title, 18);
+    const preparationRows = getTextEditorRows(detailDraft.preparationsText, 20);
+    const noteRows = getTextEditorRows(detailDraft.notes, 20);
 
     return (
       <div
@@ -1871,13 +3205,17 @@ export function App() {
               </label>
               <label>
                 开始
-                <input type="time" step="1800" value={detailDraft.startTime} onChange={(event) => setDetailDraft((draft) => draft && { ...draft, startTime: event.target.value })} />
+                <input type="time" step="1800" value={detailDraft.startTime} onClick={(event) => showTimePicker(event.currentTarget)} onFocus={(event) => showTimePicker(event.currentTarget)} onChange={(event) => setDetailDraft((draft) => draft && { ...draft, startTime: event.target.value })} />
               </label>
               <label>
                 结束
-                <input type="time" step="1800" value={detailDraft.endTime} onChange={(event) => setDetailDraft((draft) => draft && { ...draft, endTime: event.target.value })} />
+                <input type="time" step="1800" value={detailDraft.endTime} onClick={(event) => showTimePicker(event.currentTarget)} onFocus={(event) => showTimePicker(event.currentTarget)} onChange={(event) => setDetailDraft((draft) => draft && { ...draft, endTime: event.target.value })} />
               </label>
             </div>
+            <label>
+              具体安排
+              <textarea rows={contentRows} value={detailDraft.purpose} onChange={(event) => setDetailDraft((draft) => draft && { ...draft, purpose: event.target.value })} />
+            </label>
           </>
         ) : (
           <>
@@ -1892,27 +3230,27 @@ export function App() {
               </label>
               <label>
                 截止时间
-                <input type="time" step="1800" value={detailDraft.dueTime} onChange={(event) => setDetailDraft((draft) => draft && { ...draft, dueTime: event.target.value })} />
+                <input type="time" step="1800" value={detailDraft.dueTime} onClick={(event) => showTimePicker(event.currentTarget)} onFocus={(event) => showTimePicker(event.currentTarget)} onChange={(event) => setDetailDraft((draft) => draft && { ...draft, dueTime: event.target.value })} />
               </label>
             </div>
             <label>
-              估时分钟
-              <input inputMode="numeric" value={detailDraft.estimatedMinutes} onChange={(event) => setDetailDraft((draft) => draft && { ...draft, estimatedMinutes: event.target.value.replace(/\D/g, '') })} />
+              内容
+              <textarea className="detail-task-title-editor" rows={titleRows} value={detailDraft.title} onChange={(event) => setDetailDraft((draft) => draft && { ...draft, title: event.target.value })} />
             </label>
           </>
         )}
-        <label>
-          准备事项
-          <textarea rows={1} value={detailDraft.preparationsText} onChange={(event) => setDetailDraft((draft) => draft && { ...draft, preparationsText: event.target.value })} />
-        </label>
-        <div className="detail-actions">
-          <button onClick={saveItemDraft}>保存</button>
-          <button onClick={() => {
-            setSelectedDetail(null);
-            setDetailDraft(null);
-          }}>取消</button>
-          <button className="danger-button" onClick={() => deleteItem(item)}>删除</button>
-        </div>
+        {item.kind === 'event' ? (
+          <>
+            <label>
+              准备事项
+              <textarea rows={preparationRows} value={detailDraft.preparationsText} onChange={(event) => setDetailDraft((draft) => draft && { ...draft, preparationsText: event.target.value })} />
+            </label>
+            <label>
+              备注
+              <textarea rows={noteRows} value={detailDraft.notes} onChange={(event) => setDetailDraft((draft) => draft && { ...draft, notes: event.target.value })} />
+            </label>
+          </>
+        ) : null}
       </div>
     );
   }
@@ -1925,10 +3263,12 @@ export function App() {
     pendingModification ||
     parsePreview ||
     input ||
+    voiceDisplayText ||
+    catProcessStatus ||
     isListening ||
     isThinking
   );
-  const shouldShowCatDialog = hasActiveCatContent;
+  const shouldShowCatDialog = hasActiveCatContent && !isDesktopShell;
 
   if (authRequired && !authSession) {
     return (
@@ -1970,29 +3310,48 @@ export function App() {
   }
 
   return (
-    <main className={`app-shell ${draggedTodoTaskId ? 'todo-dragging' : ''}`} style={{ gridTemplateColumns: `76px minmax(0, 1fr) 8px ${rightPanelWidth}px` }}>
+    <main
+      className={`app-shell ${draggedTodoTaskId || draggedTodoProjectId ? 'todo-dragging' : ''}`}
+      style={{ gridTemplateColumns: `76px minmax(260px, 1fr) 8px minmax(240px, ${rightPanelWidth}px)` }}
+      onMouseDown={(event) => {
+        if (!activeNewTaskProjectId) return;
+        const target = event.target;
+        if (target instanceof HTMLElement && target.closest('.todo-task-form, .todo-add-task-button')) return;
+        window.setTimeout(() => {
+          void finishNewTodoTaskDraft(activeNewTaskProjectId);
+        }, 0);
+      }}
+    >
       <aside className="sidebar">
         <div className="brand">
           <span className="brand-text"><span>Yaya</span><span>Mind</span></span>
         </div>
-        {[
-          ['□', '一周', 'week'],
-          ['✓', '待办', 'todos'],
-          ['✦', '目标', 'goals'],
-          ['♡', '画像', 'profile'],
-          ['↺', '总结', 'summary']
-        ].map(([icon, item, mode]) => (
-          <button className={`nav-item ${viewMode === mode ? 'nav-active' : ''}`} key={item} title={item} onClick={() => setViewMode(mode as ViewMode)}>
-            <span className="nav-icon">{icon}</span>
-            <span className="nav-label">{item}</span>
+        <div className="nav-main">
+          {[
+            ['□', '一周', 'week'],
+            ['✓', '待办', 'todos'],
+            ['✦', '习惯', 'goals'],
+            ['♡', '画像', 'profile'],
+            ['↺', '总结', 'summary']
+          ].map(([icon, item, mode]) => (
+            <button className={`nav-item ${viewMode === mode ? 'nav-active' : ''}`} key={item} title={item} onClick={() => setViewMode(mode as ViewMode)}>
+              <span className="nav-icon">{icon}</span>
+              <span className="nav-label">{item}</span>
+            </button>
+          ))}
+        </div>
+        <div className="nav-bottom">
+          <button className={`nav-item ${viewMode === 'settings' ? 'nav-active' : ''}`} title="设置" onClick={() => setViewMode('settings')}>
+            <span className="nav-icon">⚙</span>
+            <span className="nav-label">设置</span>
           </button>
-        ))}
-        {authSession ? (
-          <button className="nav-item logout-button" title="退出账号" onClick={logout}>
-            <span className="nav-icon">↩</span>
-            <span className="nav-label">退出</span>
-          </button>
-        ) : null}
+          {authSession ? (
+            <button className="nav-item logout-button" title="退出账号" onClick={logout}>
+              <span className="nav-icon">↩</span>
+              <span className="nav-label">退出</span>
+            </button>
+          ) : null}
+        </div>
       </aside>
 
       <section className="calendar-panel">
@@ -2001,16 +3360,15 @@ export function App() {
             <header className="panel-header calendar-toolbar">
               <p className="eyebrow">一周日程</p>
               <div className="calendar-actions">
-                {calendarFocusMode === 'future' ? (
-                  <button onClick={() => {
+                <button onClick={() => {
+                  if (calendarFocusMode === 'future') {
                     setCalendarFocusMode('week');
                     setSelectedDate(toLocalDateText(new Date()));
-                  }}>
-                    回到今天
-                  </button>
-                ) : null}
-                <button onClick={() => setCalendarFocusMode((mode) => mode === 'future' ? 'week' : 'future')}>
-                  {calendarFocusMode === 'future' ? '一周' : `未来 ${futurePlanCount}`}
+                  } else {
+                    setCalendarFocusMode('future');
+                  }
+                }}>
+                  {calendarFocusMode === 'future' ? '回到今天' : `未来 ${futurePlanCount}`}
                   <span>›</span>
                 </button>
               </div>
@@ -2018,7 +3376,7 @@ export function App() {
 
             <div className={`calendar-grid ${calendarFocusMode === 'future' ? 'calendar-grid-future' : ''}`} style={{ gridTemplateColumns: `repeat(${calendarFocusMode === 'future' ? 7 : Math.max(1, visibleCalendarDays.length)}, minmax(0, 1fr))` }}>
           {visibleCalendarDays.length ? visibleCalendarDays.map((day) => (
-            <article data-date={day.date} className={`day-column ${getDayStateClass(day.date, now)} ${day.date === selectedDate ? 'day-selected' : ''}`} key={day.date} onClick={() => selectCalendarDate(day.date)}>
+            <article data-date={day.date} className={`day-column ${getDayStateClass(day.date, now)} ${getRestDayClass(day.date, data.settings ?? defaultSettings)} ${day.date === selectedDate ? 'day-selected' : ''}`} key={day.date} onClick={() => selectCalendarDate(day.date)}>
               <h2>
                 <span>{getWeekdayText(day.label)}</span>
                 <small>{getDateText(day.label)}</small>
@@ -2026,27 +3384,32 @@ export function App() {
               <div className="day-schedule">
                 <div className="schedule-inner">
                 <div className="time-guide">
-                  {getMinorTimeMarks().map((minutes) => (
-                    <i key={minutes} style={getMinuteMarkStyle(minutes)} />
+                  {getMinorTimeMarks(scheduleRange).map((minutes) => (
+                    <i key={minutes} style={getMinuteMarkStyle(minutes, scheduleRange)} />
                   ))}
-                  {getHourMarks().map((hour) => (
-                    <span key={hour} style={getHourMarkStyle(hour)}>{hour}:00</span>
+                  {getHourMarks(scheduleRange).map((hour) => (
+                    <span key={hour} style={getHourMarkStyle(hour, scheduleRange)}>{formatScheduleHour(hour)}</span>
                   ))}
                 </div>
+                {scheduleRange.sleepBlocks.map((block) => (
+                  <div className="sleep-block" key={`${day.date}-${block.start}-${block.end}`} style={getSleepBlockStyle(block, scheduleRange)}>
+                    <span>休息</span>
+                  </div>
+                ))}
                 {isToday(day.date, now) ? (
                   <>
-                    <div className="past-shade" style={getPastShadeStyle(now)} />
-                    <div className="now-line" style={getNowLineStyle(now)} />
+                    <div className="past-shade" style={getPastShadeStyle(now, scheduleRange)} />
+                    <div className="now-line" style={getNowLineStyle(now, scheduleRange)} />
                   </>
                 ) : null}
                 {day.items.length > 0 ? (
                   day.items.map((item) => (
                     <button
                       data-event-id={item.id}
-                      className={`event-card event-${item.type} ${Number(item.laneCount ?? 1) > 1 ? 'event-compact' : ''} ${item.conflict ? 'event-conflict' : ''}`}
+                      className={`event-card event-${item.type} ${item.isDraft ? 'event-draft' : ''} ${Number(item.laneCount ?? 1) > 1 ? 'event-compact' : ''} ${item.conflict ? 'event-conflict' : ''}`}
                       key={item.id}
                       draggable={false}
-                      style={getEventStyle(dragPreview?.id === item.id ? dragPreview.startAt : item.startAt, dragPreview?.id === item.id ? dragPreview.endAt : item.endAt, item.lane, item.laneCount)}
+                      style={getEventStyle(dragPreview?.id === item.id ? dragPreview.startAt : item.startAt, dragPreview?.id === item.id ? dragPreview.endAt : item.endAt, item.lane, item.laneCount, scheduleRange)}
                       onMouseDown={(event) => startEventAdjust(event, item, day.date, 'move')}
                       onClick={(event) => {
                         event.stopPropagation();
@@ -2058,6 +3421,7 @@ export function App() {
                         onMouseDown={(event) => startEventAdjust(event, item, day.date, 'resize-start')}
                       />
                       <strong>{getShortTitle(item.title)}</strong>
+                      {item.isDraft ? <i>草稿</i> : null}
                       {item.conflict ? <i>冲突</i> : null}
                       <span
                         className="resize-handle resize-end"
@@ -2084,12 +3448,6 @@ export function App() {
             <header className="panel-header todo-toolbar">
               <p className="eyebrow">项目待办</p>
               <div className="todo-toolbar-actions">
-                {otherProjectTodoGroups.length ? (
-                  <button className="todo-page-toggle" onClick={() => setTodoProjectPage((page) => (page === 'core' ? 'other' : 'core'))}>
-                    {todoProjectPage === 'core' ? `其他项目 ${otherProjectTodoGroups.length}` : '核心项目'}
-                    <span>›</span>
-                  </button>
-                ) : null}
                 <button className="todo-add-project" onClick={createBlankTodoProject}>
                   <span>＋</span>
                   新增项目
@@ -2100,15 +3458,45 @@ export function App() {
               {visibleProjectTodoGroups.length ? (
                 visibleProjectTodoGroups.map((group) => (
                   <section
-                    className="project-todo-group"
+                    className={`project-todo-group ${todoDragReady?.kind === 'project' && todoDragReady.id === group.projectId ? 'todo-selected' : ''} ${todoContextMenu?.kind === 'project' && todoContextMenu.project.id === group.projectId ? 'todo-context-selected' : ''} ${draggedTodoProjectId === group.projectId ? 'todo-drag-source' : ''} ${todoDropPreview?.kind === 'project' && todoDropPreview.targetId === group.projectId ? `todo-drop-preview todo-drop-${todoDropPreview.position}` : ''} ${todoDropPreview?.kind === 'project-end' && todoDropPreview.targetId === group.projectId ? 'todo-project-end-preview' : ''}`}
+                    data-project-id={group.projectId}
                     key={group.projectId}
+                    draggable={!isUncategorizedTodoProject(group.project)}
                     style={{ '--project-color': group.color } as CSSProperties}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      if (event.target instanceof HTMLElement && event.target.closest('.project-todo-item, .todo-task-form, .todo-empty-start, button, input, textarea, select')) return;
+                      openTodoProjectContextMenu(event, group.project);
+                    }}
+                    onMouseDown={(event) => {
+                      if (event.target instanceof HTMLElement && event.target.closest('.project-todo-item, .todo-task-form, .todo-empty-start')) return;
+                      armTodoDrag(event, 'project', group.projectId);
+                    }}
+                    onMouseUp={disarmTodoDragIfIdle}
+                    onDragStart={(event) => startTodoProjectDrag(event, group.project)}
+                    onDragEnd={clearTodoDragState}
                     onDragOver={(event) => {
                       event.preventDefault();
                       event.dataTransfer.dropEffect = 'move';
+                      if (draggedTodoTaskId) {
+                        setTodoDropPreview({ kind: 'project-end', targetId: group.projectId });
+                      } else if (draggedTodoProjectId && group.projectId !== draggedTodoProjectId) {
+                        setTodoDropPreview({ kind: 'project', targetId: group.projectId, position: getDropPosition(event) });
+                      }
+                    }}
+                    onDragLeave={(event) => {
+                      const nextTarget = event.relatedTarget;
+                      if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) return;
+                      setTodoDropPreview((current) => (current?.targetId === group.projectId ? null : current));
                     }}
                     onDrop={(event) => {
                       event.preventDefault();
+                      setTodoDropPreview(null);
+                      const project = getDraggedTodoProject(event);
+                      if (project) {
+                        void moveTodoProjectRelative(project, group.project, getDropPosition(event));
+                        return;
+                      }
                       const task = getDraggedTodoTask(event);
                       if (task) void moveTodoTaskToProject(task, group.projectId);
                     }}
@@ -2127,17 +3515,22 @@ export function App() {
                           }}
                         />
                       ) : (
-                        <strong onClick={() => startEditTodoProject(group.project)}>{group.projectTitle}</strong>
+                        <strong onDoubleClick={() => startEditTodoProject(group.project)}>{group.projectTitle}</strong>
                       )}
+                      <button className="todo-add-task-button" type="button" title="新增待办" aria-label={`给${group.projectTitle}新增待办`} onClick={() => startNewTodoTask(group.projectId)}>
+                        ＋
+                      </button>
                       <span>{group.openCount} / {group.tasks.length}</span>
-                      <div className="todo-inline-actions">
-                        <button disabled={group.projectId === 'uncategorized'} onClick={() => deleteTodoProject(group.project)}>
-                          删除
-                        </button>
-                      </div>
                     </div>
                     {activeNewTaskProjectId === group.projectId ? (
-                    <div className="todo-task-form">
+                    <div
+                      className="todo-task-form"
+                      onBlur={(event) => {
+                        const nextTarget = event.relatedTarget;
+                        if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) return;
+                        void finishNewTodoTaskDraft(group.projectId);
+                      }}
+                    >
                       <input
                         data-new-task-project={group.projectId}
                         value={newTaskDraftByProject[group.projectId]?.title ?? ''}
@@ -2168,11 +3561,45 @@ export function App() {
                         return (
                           <article
                             data-task-id={task.id}
-                            className={`project-todo-item ${isDone ? 'todo-done' : ''}`}
+                            className={`project-todo-item ${isDone ? 'todo-done' : ''} ${todoDragReady?.kind === 'task' && todoDragReady.id === task.id ? 'todo-selected' : ''} ${todoContextMenu?.kind === 'task' && todoContextMenu.task.id === task.id ? 'todo-context-selected' : ''} ${draggedTodoTaskId === task.id ? 'todo-drag-source' : ''} ${todoDropPreview?.kind === 'task' && todoDropPreview.targetId === task.id ? `todo-task-drop-preview todo-drop-${todoDropPreview.position}` : ''}`}
                             key={task.id}
                             draggable
+                            onMouseDown={(event) => {
+                              event.stopPropagation();
+                              armTodoDrag(event, 'task', task.id);
+                            }}
+                            onMouseUp={disarmTodoDragIfIdle}
+                            onContextMenu={(event) => {
+                              openTodoTaskContextMenu(event, task);
+                            }}
                             onDragStart={(event) => startTodoDrag(event, task)}
-                            onDragEnd={() => setDraggedTodoTaskId(null)}
+                            onDragEnd={clearTodoDragState}
+                            onDragOver={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              event.dataTransfer.dropEffect = 'move';
+                              if (draggedTodoTaskId && draggedTodoTaskId !== task.id) {
+                                const draggedTask = data.tasks.find((item) => item.id === draggedTodoTaskId);
+                                if (draggedTask && (draggedTask.projectId || 'uncategorized') === group.projectId) {
+                                  setTodoDropPreview({ kind: 'task', targetId: task.id, position: getDropPosition(event) });
+                                } else {
+                                  setTodoDropPreview({ kind: 'project-end', targetId: group.projectId });
+                                }
+                              }
+                            }}
+                            onDrop={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              setTodoDropPreview(null);
+                              const draggedTask = getDraggedTodoTask(event);
+                              if (draggedTask) {
+                                if ((draggedTask.projectId || 'uncategorized') !== group.projectId) {
+                                  void moveTodoTaskToProject(draggedTask, group.projectId);
+                                } else {
+                                  void moveTodoTaskRelative(draggedTask, task, group.projectId, getDropPosition(event));
+                                }
+                              }
+                            }}
                             style={{ viewTransitionName: `todo-${task.id}`, '--project-color': getProjectColor(task.projectId) } as CSSProperties}
                           >
                             <button
@@ -2192,53 +3619,43 @@ export function App() {
                             </button>
                             <div className="todo-copy">
                               {editingTodoTaskId === task.id && editingTodoField === 'title' ? (
-                                <input
+                                <textarea
                                   className="todo-title-editor"
+                                  rows={getTextEditorRows(todoTaskDraft.title, 12)}
                                   value={todoTaskDraft.title}
                                   onChange={(event) => setTodoTaskDraft((draft) => ({ ...draft, title: event.target.value }))}
                                   autoFocus
                                   onBlur={() => {
                                     void saveTodoTaskDraft(task.id);
                                   }}
-                                  onKeyDown={(event) => {
-                                    if (event.key === 'Enter') {
-                                      void saveTodoTaskDraft(task.id).then(() => startNewTodoTask(task.projectId));
-                                    }
-                                  }}
                                 />
                               ) : (
-                                <span onClick={() => startEditTodoTask(task, 'title')}>{task.title}</span>
+                                <span className="todo-content-text" onDoubleClick={() => startEditTodoTask(task, 'title')}>{task.title}</span>
                               )}
-                              {editingTodoTaskId === task.id && editingTodoField === 'notes' ? (
-                                <input
-                                  className="todo-note-editor"
-                                  value={todoTaskDraft.notes}
-                                  onChange={(event) => setTodoTaskDraft((draft) => ({ ...draft, notes: event.target.value }))}
-                                  placeholder="备注"
-                                  autoFocus
-                                  onBlur={() => {
-                                    void saveTodoTaskDraft(task.id);
-                                  }}
-                                  onKeyDown={(event) => {
-                                    if (event.key === 'Enter') void saveTodoTaskDraft(task.id);
-                                  }}
-                                />
-                              ) : (
-                                <small onClick={() => startEditTodoTask(task, 'notes')}>{formatTodoMeta(task)}</small>
-                              )}
+                            </div>
+                            <div className="todo-inline-actions todo-row-actions todo-side-meta">
                               {getTodoDateTag(task) ? (
-                                <button className="todo-date-tag" style={getTodoDateTagStyle(task)} onClick={() => clearTodoDeadline(task)}>
+                                <button
+                                  className="todo-date-tag"
+                                  style={getTodoDateTagStyle(task)}
+                                  title="移除截止时间"
+                                  type="button"
+                                  onMouseDown={(event) => event.stopPropagation()}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    void clearTodoDeadline(task);
+                                  }}
+                                >
                                   <span>{getTodoDateTag(task)}</span>
-                                  <b>×</b>
                                 </button>
                               ) : null}
-                            </div>
-                            <div className="todo-inline-actions todo-row-actions">
-                              <button onClick={() => deleteTodoTask(task)}>删除</button>
                             </div>
                           </article>
                         );
                       })}
+                      {todoDropPreview?.kind === 'project-end' && todoDropPreview.targetId === group.projectId && draggedTodoTaskId ? (
+                        <div className="todo-drop-slot">松开后移到这个项目末尾</div>
+                      ) : null}
                     </div>
                   </section>
                 ))
@@ -2286,11 +3703,40 @@ export function App() {
           <section className="workspace-view">
             <header className="panel-header">
               <div>
-                <p className="eyebrow">个人画像</p>
-                <h1>习惯信号</h1>
+                <h1>个人画像</h1>
               </div>
             </header>
             <div className="profile-grid">
+              <section className="profile-block profile-preferences">
+                <strong>日程显示和休息日</strong>
+                <div className="preference-grid">
+                  <label>
+                    起床
+                    <input type="time" value={settingsDraft.wakeUp} onClick={(event) => showTimePicker(event.currentTarget)} onFocus={(event) => showTimePicker(event.currentTarget)} onChange={(event) => updateSettingsDraft({ wakeUp: event.target.value })} />
+                  </label>
+                  <label>
+                    睡觉
+                    <input type="time" value={settingsDraft.sleepStart} onClick={(event) => showTimePicker(event.currentTarget)} onFocus={(event) => showTimePicker(event.currentTarget)} onChange={(event) => updateSettingsDraft({ sleepStart: event.target.value })} />
+                  </label>
+                  <label>
+                    休息
+                    <select value={settingsDraft.restDayMode} onChange={(event) => updateSettingsDraft({ restDayMode: event.target.value as SettingsDraft['restDayMode'] })}>
+                      <option value="weekend">双休</option>
+                      <option value="single_sunday">单休周日</option>
+                      <option value="single_saturday">单休周六</option>
+                      <option value="alternate_weekends">大小周</option>
+                    </select>
+                  </label>
+                  <label className="preference-toggle">
+                    <input type="checkbox" checked={settingsDraft.showLegalHolidays} onChange={(event) => updateSettingsDraft({ showLegalHolidays: event.target.checked })} />
+                    显示法定节假日
+                  </label>
+                  {settingsDirty ? <button className="preference-save" onClick={saveSettingsDraft}>保存习惯</button> : null}
+                </div>
+                <div className="preference-footer">
+                  <small>{settingsMessage || getScheduleRangeText(data.settings ?? defaultSettings)}</small>
+                </div>
+              </section>
               <ProfileBlock title="时间习惯" items={[...data.profile.timeHabits.highFocusWindows, ...data.profile.timeHabits.commonDelayWindows]} empty="还在观察你的高效和拖延时段。" />
               <ProfileBlock title="估时模式" items={[...data.profile.estimationPatterns.bufferRules, ...data.profile.estimationPatterns.oftenUnderestimatedTags]} empty="还没有稳定的估时模式。" />
               <ProfileBlock title="生活节奏" items={[...data.profile.lifeRhythm.regularMeals, ...data.profile.lifeRhythm.exercisePreferences, ...data.profile.lifeRhythm.restPatterns]} empty="还没有生活节奏记录。" />
@@ -2314,10 +3760,53 @@ export function App() {
             <p className="summary-message">{summaryMessage || '总结会写入 personal-assistant-data/summaries，方便放回 Obsidian 阅读。'}</p>
           </section>
         ) : null}
+
+        {viewMode === 'settings' ? (
+          <section className="workspace-view">
+            <header className="panel-header">
+              <div>
+                <p className="eyebrow">设置</p>
+                <h1>AI 接口</h1>
+              </div>
+            </header>
+            <div className="settings-grid">
+              <section className="workspace-card settings-card">
+                <strong>模型接口</strong>
+                <div className="settings-form">
+                  <label className="preference-toggle">
+                    <input type="checkbox" checked={settingsDraft.aiEnabled} onChange={(event) => updateSettingsDraft({ aiEnabled: event.target.checked })} />
+                    启用 AI 理解
+                  </label>
+                  <label>
+                    服务类型
+                    <select value={settingsDraft.aiProvider} onChange={(event) => updateSettingsDraft({ aiProvider: event.target.value as SettingsDraft['aiProvider'] })}>
+                      <option value="deepseek">DeepSeek</option>
+                      <option value="openai-compatible">OpenAI 兼容接口</option>
+                    </select>
+                  </label>
+                  <label>
+                    API 地址
+                    <input value={settingsDraft.aiBaseUrl} onChange={(event) => updateSettingsDraft({ aiBaseUrl: event.target.value })} placeholder="https://api.deepseek.com" />
+                  </label>
+                  <label>
+                    模型
+                    <input value={settingsDraft.aiModel} onChange={(event) => updateSettingsDraft({ aiModel: event.target.value })} placeholder="deepseek-chat" />
+                  </label>
+                  <label>
+                    API Key
+                    <input type="password" value={settingsDraft.aiApiKey} onChange={(event) => updateSettingsDraft({ aiApiKey: event.target.value })} placeholder="sk-..." autoComplete="off" />
+                  </label>
+                  {settingsDirty ? <button className="preference-save" onClick={saveSettingsDraft}>保存设置</button> : null}
+                </div>
+                <small>{settingsMessage || '本地桌面版会优先使用这里保存的接口；没有填写时继续读取环境变量。'}</small>
+              </section>
+            </div>
+          </section>
+        ) : null}
       </section>
 
       <div className="panel-resizer" onMouseDown={startPanelResize} title="拖动调整右侧宽度" />
-      <aside className="today-panel">
+      <aside className={`today-panel ${viewMode === 'todos' ? 'todo-side-panel' : 'week-detail-panel'}`}>
         {viewMode === 'todos' ? (
           <section className="todo-month-panel">
             <p className="eyebrow">{now.getFullYear()} 年 {now.getMonth() + 1} 月</p>
@@ -2327,7 +3816,8 @@ export function App() {
             <div className="todo-month-grid">
               {monthCalendarDays.map((day) => (
                 <button
-                  className={`todo-month-day ${day.inMonth ? '' : 'todo-month-muted'} ${todoDeadlineDates.has(day.date) ? 'todo-month-deadline' : ''}`}
+                  className={`todo-month-day ${day.inMonth ? '' : 'todo-month-muted'} ${todoDeadlineDates.has(day.date) ? 'todo-month-deadline' : ''} ${todoDropPreview?.kind === 'date' && todoDropPreview.targetId === day.date ? 'todo-date-drop-preview' : ''}`}
+                  data-todo-date={day.date}
                   key={day.date}
                   onClick={() => selectCalendarDate(day.date)}
                   onDragOver={(event) => event.preventDefault()}
@@ -2353,125 +3843,206 @@ export function App() {
         ) : (
           <>
         <section>
-          <h2>{selectedDay ? formatSelectedDayTitle(selectedDay.label) : '选择一天'}</h2>
-        </section>
-
-        <section>
-          {selectedDay?.items.length ? (
-            selectedDay.items
-              .slice()
-              .sort((a, b) => (a.startAt ?? a.dueAt ?? '').localeCompare(b.startAt ?? b.dueAt ?? ''))
-              .map((item) => (
-                <article
-                  className={`detail-row ${item.conflict ? 'detail-row-conflict' : ''}`}
-                  key={item.id}
-                  onClick={(event) => openDetailFromRow(event, { ...item, kind: 'event' })}
-                >
-                  <div className="detail-row-head">
-                    <div>
-                      <strong>{formatItemTime(item)}</strong>
-                      <span>标题：{item.title}</span>
-                      {getCompactItemMeta(item) ? <small>{getCompactItemMeta(item)}</small> : null}
-                    </div>
-                  </div>
-                  {renderDetailExtras(item)}
-                  {renderInlineDetailEditor({ ...item, kind: 'event' })}
-                </article>
-              ))
-          ) : (
-            <p className="muted">这天暂时没有明确时间块。</p>
-          )}
-        </section>
-
-        {selectedDay && [...selectedDay.pendingItems, ...selectedDay.tasks.filter(needsTaskClarification)].length ? (
-          <section>
-            <p className="eyebrow">待补充事项</p>
-            {[...selectedDay.pendingItems, ...selectedDay.tasks.filter(needsTaskClarification)]
-              .slice()
-              .map((item) => (
-                <article
-                  className="detail-row detail-row-pending"
-                  key={item.id}
-                  onClick={(event) => openDetailFromRow(event, { ...item, kind: item.type === 'task' ? 'task' : 'event' })}
-                >
-                  <div className="detail-row-head">
-                    <div>
-                      <strong>{getPendingItemLabel(item)}</strong>
-                      <span>{item.title}</span>
-                      <small>{getPendingItemHint(item)}</small>
-                    </div>
-                  </div>
-                  {renderDetailExtras(item)}
-                  {renderInlineDetailEditor({ ...item, kind: item.type === 'task' ? 'task' : 'event' })}
-                </article>
-              ))}
-          </section>
-        ) : null}
-
-        {selectedDay?.tasks.filter((item) => !needsTaskClarification(item)).length ? (
-          <section>
-            <p className="eyebrow">截止任务</p>
-            {selectedDay.tasks
-              .filter((item) => !needsTaskClarification(item))
-              .slice()
-              .sort((a, b) => (a.dueAt ?? '').localeCompare(b.dueAt ?? ''))
-              .map((item) => (
-                <article className="detail-row detail-row-deadline" key={item.id} onClick={(event) => openDetailFromRow(event, { ...item, kind: 'task' })}>
-                  <div className="detail-row-head">
-                    <div>
-                      <strong>{formatItemTime(item)}</strong>
-                      <span>{item.title}</span>
-                      <small>截止任务</small>
-                    </div>
-                  </div>
-                  {renderDetailExtras(item)}
-                  {renderInlineDetailEditor({ ...item, kind: 'task' })}
-                </article>
-              ))}
-          </section>
-        ) : null}
-
-        {(selectedDay?.weatherAlerts?.length || selectedDay?.reminders?.length) ? (
-          <section>
-            <p className="eyebrow">提醒</p>
-            {selectedDay.weatherAlerts.length ? (
-              <div className="reminder-group">
-                <strong>出门提醒</strong>
-                {selectedDay.weatherAlerts.map((alert) => (
-                  <div className="weather-row" key={alert.id}>
-                    <span>{alert.detail}</span>
-                    <small>{alert.remindAt ? `建议提醒：${formatReminderTime(alert.remindAt)}` : '出门前看一眼。'}</small>
-                  </div>
-                ))}
-              </div>
-            ) : null}
-            {selectedDay.reminders.length ? (
-              <div className="reminder-group">
-                <strong>事件提醒</strong>
-                {selectedDay.reminders.map((reminder) => (
-                  <div className="reminder-row" key={reminder.id}>
-                    <strong>{reminder.title}</strong>
-                    <small>{formatReminderTime(reminder.remindAt)} · {getReminderStatusLabel(reminder.status)}</small>
-                  </div>
-                ))}
-              </div>
-            ) : null}
-            {notificationPermission !== 'granted' ? (
-              <button className="notification-button" onClick={requestNotificationPermission}>
-                开启桌面提醒
+          <div className="detail-title-row">
+            <h2>{selectedDay ? formatSelectedDayTitle(selectedDay.date, selectedDay.label) : '选择一天'}</h2>
+            {selectedDay ? (
+              <button className="icon-add-button" type="button" title="新增日程" aria-label="新增日程" onClick={() => startManualEventDraft(selectedDay.date)}>
+                ＋
               </button>
             ) : null}
+          </div>
+        </section>
+
+        <div className="today-detail-split">
+          <section className="today-detail-zone today-schedule-zone">
+            <p className="eyebrow">日程</p>
+            <div className="today-zone-scroll">
+              {manualEventDraft ? (
+                <ManualEventEditor
+                  draft={manualEventDraft}
+                  onChange={setManualEventDraft}
+                  onSave={saveManualEventDraft}
+                  onCancel={() => setManualEventDraft(null)}
+                />
+              ) : null}
+              {selectedDay?.items.length ? (
+                selectedDay.items
+                  .slice()
+                  .sort((a, b) => (a.startAt ?? a.dueAt ?? '').localeCompare(b.startAt ?? b.dueAt ?? ''))
+                  .map((item) => (
+                    <article
+                      className={`detail-row ${item.isDraft ? 'detail-row-draft' : ''} ${detailDraft && selectedDetail?.id === item.id && selectedDetail.kind === 'event' ? 'detail-row-editing' : ''} ${detailContextMenu?.item.id === item.id && detailContextMenu.item.kind === 'event' ? 'detail-context-selected' : ''} ${item.conflict ? 'detail-row-conflict' : ''}`}
+                      key={item.id}
+                      onClick={(event) => openDetailFromRow(event, { ...item, kind: 'event' })}
+                      onDoubleClick={(event) => editDetailFromRow(event, { ...item, kind: 'event' })}
+                      onContextMenu={(event) => openDetailContextMenu(event, { ...item, kind: 'event' })}
+                    >
+                      <div className="detail-row-head">
+                        <div>
+                          <strong>{formatItemTime(item)}</strong>
+                          <span>{item.isDraft ? '草稿标题：' : '标题：'}{item.title}</span>
+                          {getCompactItemMeta(item) ? <small>{getCompactItemMeta(item)}</small> : null}
+                        </div>
+                      </div>
+                      {renderDetailExtras(item)}
+                      {renderInlineDetailEditor({ ...item, kind: 'event' })}
+                    </article>
+                  ))
+              ) : (
+                <p className="muted">这天暂时没有明确时间块。</p>
+              )}
+              {selectedDay && [...selectedDay.pendingItems, ...selectedDay.tasks.filter(needsTaskClarification)].length ? (
+                <div className="today-subsection">
+                  <p className="eyebrow">待补充事项</p>
+                  {[...selectedDay.pendingItems, ...selectedDay.tasks.filter(needsTaskClarification)]
+                    .slice()
+                    .map((item) => (
+                      <article
+                        className={`detail-row detail-row-pending ${item.isDraft ? 'detail-row-draft' : ''} ${detailDraft && selectedDetail?.id === item.id ? 'detail-row-editing' : ''} ${detailContextMenu?.item.id === item.id ? 'detail-context-selected' : ''}`}
+                        key={item.id}
+                        onClick={(event) => openDetailFromRow(event, { ...item, kind: item.type === 'task' ? 'task' : 'event' })}
+                        onDoubleClick={(event) => editDetailFromRow(event, { ...item, kind: item.type === 'task' ? 'task' : 'event' })}
+                        onContextMenu={(event) => openDetailContextMenu(event, { ...item, kind: item.type === 'task' ? 'task' : 'event' })}
+                      >
+                        <div className="detail-row-head">
+                          <div>
+                            <strong>{getPendingItemLabel(item)}</strong>
+                            <span>{item.title}</span>
+                            <small>{getPendingItemHint(item)}</small>
+                          </div>
+                        </div>
+                        {renderDetailExtras(item)}
+                        {renderInlineDetailEditor({ ...item, kind: item.type === 'task' ? 'task' : 'event' })}
+                      </article>
+                    ))}
+                </div>
+              ) : null}
+              {(selectedDay?.weatherAlerts?.length || selectedDay?.reminders?.length) ? (
+                <div className="today-subsection">
+                  <p className="eyebrow">提醒</p>
+                  {selectedDay.weatherAlerts.length ? (
+                    <div className="reminder-group">
+                      <strong>出门提醒</strong>
+                      {selectedDay.weatherAlerts.map((alert) => (
+                        <div className="weather-row" key={alert.id}>
+                          <span>{alert.detail}</span>
+                          <small>{alert.remindAt ? `建议提醒：${formatReminderTime(alert.remindAt)}` : '出门前看一眼。'}</small>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                  {selectedDay.reminders.length ? (
+                    <div className="reminder-group">
+                      <strong>事件提醒</strong>
+                      {selectedDay.reminders.map((reminder) => (
+                        <div className="reminder-row" key={reminder.id}>
+                          <strong>{reminder.title}</strong>
+                          <small>{formatReminderTime(reminder.remindAt)} · {getReminderStatusLabel(reminder.status)}</small>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                  {notificationPermission !== 'granted' ? (
+                    <button className="notification-button" onClick={requestNotificationPermission}>
+                      开启桌面提醒
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
           </section>
-        ) : null}
+
+          <section className="today-detail-zone today-task-zone">
+            <p className="eyebrow">待办</p>
+            <div className="today-zone-scroll">
+              {selectedDay?.tasks.filter((item) => !needsTaskClarification(item)).length ? (
+                selectedDay.tasks
+                  .filter((item) => !needsTaskClarification(item))
+                  .slice()
+                  .sort((a, b) => (a.dueAt ?? '').localeCompare(b.dueAt ?? ''))
+                  .map((item) => (
+                    <article
+                      className={`detail-row detail-row-deadline ${detailDraft && selectedDetail?.id === item.id && selectedDetail.kind === 'task' ? 'detail-row-editing' : ''} ${detailContextMenu?.item.id === item.id && detailContextMenu.item.kind === 'task' ? 'detail-context-selected' : ''}`}
+                      key={item.id}
+                      onClick={(event) => openDetailFromRow(event, { ...item, kind: 'task' })}
+                      onDoubleClick={(event) => editDetailFromRow(event, { ...item, kind: 'task' })}
+                      onContextMenu={(event) => openDetailContextMenu(event, { ...item, kind: 'task' })}
+                    >
+                      <div className="detail-row-head">
+                        <div>
+                          <strong>{formatItemTime(item)}</strong>
+                          <span>{item.title}</span>
+                        </div>
+                      </div>
+                      {renderDetailExtras(item)}
+                      {renderInlineDetailEditor({ ...item, kind: 'task' })}
+                    </article>
+                  ))
+              ) : (
+                <p className="muted">这天没有到期待办。</p>
+              )}
+            </div>
+          </section>
+        </div>
           </>
         )}
       </aside>
 
+      {todoContextMenu ? (
+        <div
+          className="todo-context-menu"
+          style={{ left: todoContextMenu.x, top: todoContextMenu.y }}
+          onClick={(event) => event.stopPropagation()}
+          onContextMenu={(event) => event.preventDefault()}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              if (todoContextMenu.kind === 'task') void deleteTodoTask(todoContextMenu.task);
+              else void deleteTodoProject(todoContextMenu.project);
+            }}
+          >
+            删除
+          </button>
+        </div>
+      ) : null}
+
+      {detailContextMenu ? (
+        <div
+          className="todo-context-menu detail-context-menu"
+          style={{ left: detailContextMenu.x, top: detailContextMenu.y }}
+          onClick={(event) => event.stopPropagation()}
+          onContextMenu={(event) => event.preventDefault()}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              void deleteItem(detailContextMenu.item);
+              setDetailContextMenu(null);
+            }}
+          >
+            删除
+          </button>
+        </div>
+      ) : null}
+
       <div
-        className="cat-widget"
+        className={`cat-widget ${isDesktopShell ? 'cat-widget-desktop-shell' : ''}`}
         style={catPosition ? { left: catPosition.left, top: catPosition.top, right: 'auto', bottom: 'auto' } : undefined}
       >
         {shouldShowCatDialog ? <div className={`cat-dialog ${hasActiveCatContent ? '' : 'cat-dialog-idle'}`}>
+          <button
+            className="cat-dialog-close"
+            type="button"
+            title="取消本次对话"
+            aria-label="取消本次对话"
+            onClick={(event) => {
+              event.stopPropagation();
+              cancelVoiceInteraction('');
+            }}
+          >
+            ×
+          </button>
           {message && !pendingClarification && !pendingDecision ? <p>{message}</p> : null}
           {pendingClarification ? (
             <ClarificationCard
@@ -2516,16 +4087,32 @@ export function App() {
             <InputUnderstandingCard result={parsePreview} onSelectOption={commitInput} />
           ) : null}
           <div className="voice-panel">
-            <div className={`voice-transcript ${input ? '' : 'voice-empty'}`}>
-              {input || (isListening ? '...' : '')}
+            <div className={`voice-transcript ${input || voiceDisplayText ? '' : 'voice-empty'}`}>
+              {input || voiceDisplayText || (isListening ? '正在听，你可以直接说。' : '')}
             </div>
+            {catProcessStatus || isThinking ? <small className="voice-status">{catProcessStatus || '理解意图中'}</small> : null}
           </div>
         </div> : null}
-        <div className={`cat-face ${isListening ? 'cat-listening' : ''} ${isThinking ? 'cat-thinking' : ''} ${hasActiveCatContent ? '' : 'cat-sleeping'}`} onMouseDown={startCatDrag} title="点一下开始说话，拖动可以移动小猫">
-          <img src={ragdollAvatar} alt="YayaMind 布偶猫助手" />
-          <span className="cat-state-mark" />
-        </div>
+        {!isDesktopShell ? (
+          <div className={`cat-face ${isListening ? 'cat-listening' : ''} ${isThinking ? 'cat-thinking' : ''} ${hasActiveCatContent ? '' : 'cat-sleeping'}`} onMouseDown={startCatDrag} title="点一下开始说话，拖动可以移动小猫">
+            <img src={isListening || isThinking ? catListeningAvatar : catSleepingAvatar} alt="YayaMind 小猫助手" />
+            <span className="cat-state-mark" />
+          </div>
+        ) : null}
       </div>
+
+      {isDesktopShell ? (
+        <textarea
+          ref={systemDictationInputRef}
+          className="system-dictation-capture"
+          aria-label="系统听写捕获"
+          tabIndex={-1}
+          onInput={(event) => {
+            const nextText = event.currentTarget.value.trim();
+            updateVoiceText(nextText);
+          }}
+        />
+      ) : null}
 
     </main>
   );
@@ -2565,6 +4152,7 @@ function getCompactItemMeta(item: CalendarItem) {
 }
 
 function renderDetailExtras(item: CalendarItem) {
+  if (item.type === 'task') return null;
   const rows: Array<{ label: string; value: string }> = [];
   const content = getItemContent(item);
   const preparations = dedupeTextList(item.preparations ?? []);
@@ -2579,11 +4167,26 @@ function renderDetailExtras(item: CalendarItem) {
 }
 
 function getItemContent(item: CalendarItem) {
-  const raw = cleanupSpokenDetail(item.purpose || item.rawText || '');
+  const raw = summarizeDisplayPurpose(cleanupSpokenDetail(item.purpose || item.rawText || ''));
   const title = item.title.trim();
   if (!raw || raw === title) return '';
   if (raw.includes(title) && raw.length <= title.length + 4) return '';
   return raw;
+}
+
+function summarizeDisplayPurpose(text: string) {
+  let value = text
+    .replace(/^(今天|明天|后天|周[一二三四五六日天]|星期[一二三四五六日天])/, '')
+    .replace(/^(上午|中午|下午|晚上|今晚|早上|饭前|饭后|吃饭前|吃完饭后|然后)/, '')
+    .replace(/^(我先|我要|我想|帮我|安排|加一个|新增|新加|记一下|记得)/, '')
+    .replace(/(大概|可能|应该|差不多|左右|一下|一个)?(小时|分钟).*$/g, '')
+    .replace(/[，。；;]\s*$/g, '')
+    .trim();
+  if (value.length < 4 && /面试/.test(text)) value = '准备面试';
+  if (value.length < 3 && /健身|运动|锻炼/.test(text)) value = '健身';
+  if (value.length < 3 && /项目/.test(text)) value = text.match(/(?:改|修改|整理|推进)?[^，。；;]*项目/)?.[0]?.trim() ?? value;
+  if (value.length > 42) value = `${value.slice(0, 40)}…`;
+  return value;
 }
 
 function dedupeTextList(items: string[]) {
@@ -2651,10 +4254,9 @@ function getWeekStart(value: Date) {
 }
 
 function formatWeekLabel(date: Date) {
-  const today = new Date();
   const weekday = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][date.getDay()];
   const dateText = `${date.getMonth() + 1}/${date.getDate()}`;
-  return toLocalDateText(date) === toLocalDateText(today) ? `今天 ${weekday} ${dateText}` : `${weekday} ${dateText}`;
+  return `${weekday} ${dateText}`;
 }
 
 function getWeekdayText(label: string) {
@@ -2663,11 +4265,11 @@ function getWeekdayText(label: string) {
 }
 
 function getDateText(label: string) {
-  return label.startsWith('今天') ? '今天' : '';
+  return '';
 }
 
-function formatSelectedDayTitle(label: string) {
-  return label.replace(/^今天\s+/, '');
+function formatSelectedDayTitle(date: string, label: string) {
+  return date === toLocalDateText(new Date()) ? '今天' : label.replace(/^今天\s+/, '');
 }
 
 function formatReminderTime(value: string) {
@@ -2689,7 +4291,7 @@ function createDetailDraft(item: DetailTarget, fallbackDate: string): DetailDraf
     dueDate: due ? toLocalDateText(due) : fallbackDate,
     dueTime: due ? toTimeInputValue(due) : '',
     estimatedMinutes: typeof item.estimatedMinutes === 'number' ? String(item.estimatedMinutes) : '',
-    purpose: item.purpose ?? '',
+    purpose: item.purpose ?? getItemContent(item),
     preparationsText: item.preparations?.join('\n') ?? ''
   };
 }
@@ -2725,6 +4327,327 @@ function splitPreparations(value: string) {
     .filter(Boolean);
 }
 
+const splitListText = splitPreparations;
+
+function createSettingsDraft(settings: AppSettings): SettingsDraft {
+  return {
+    wakeUp: settings.habits.wakeUp || '06:00',
+    sleepStart: settings.habits.sleepStart || '22:00',
+    restDayMode: settings.habits.restDayMode || 'weekend',
+    showLegalHolidays: settings.habits.showLegalHolidays !== false,
+    aiProvider: settings.ai?.provider ?? 'deepseek',
+    aiEnabled: settings.ai?.enabled !== false,
+    aiBaseUrl: settings.ai?.baseUrl || 'https://api.deepseek.com',
+    aiModel: settings.ai?.model || 'deepseek-chat',
+    aiApiKey: settings.ai?.apiKey || ''
+  };
+}
+
+function inferRangeFromHabit(wakeUp: string, sleepStart: string) {
+  const wakeHour = Number((wakeUp || '06:00').slice(0, 2));
+  const sleepHour = Number((sleepStart || '22:00').slice(0, 2));
+  if (sleepHour > wakeHour) return { startHour: wakeHour, endHour: sleepHour };
+  return { startHour: wakeHour, endHour: Math.min(30, sleepHour + 24) };
+}
+
+function getScheduleRangeText(settings: AppSettings) {
+  const range = getScheduleRange(settings);
+  return `当前显示 ${formatScheduleHour(range.startHour)}-${formatScheduleHour(range.endHour)}，问候会按这个作息变得更贴近你。`;
+}
+
+function formatScheduleHour(hour: number) {
+  const normalized = ((hour % 24) + 24) % 24;
+  return `${String(normalized).padStart(2, '0')}:00`;
+}
+
+function getRestDayClass(dateText: string, settings: AppSettings) {
+  const date = new Date(`${dateText}T12:00:00`);
+  const shouldShowLegalHolidays = settings.habits.showLegalHolidays !== false;
+  if (isAdjustedWorkday(dateText) && shouldShowLegalHolidays) return 'day-adjusted-work';
+  if (isLegalHoliday(dateText) && shouldShowLegalHolidays) return 'day-rest day-legal-rest';
+  if (!isRestDay(date, settings)) return '';
+  return 'day-rest';
+}
+
+function isRestDay(date: Date, settings: AppSettings) {
+  const day = date.getDay();
+  const mode = settings.habits.restDayMode;
+  if (mode === 'weekend') return day === 0 || day === 6;
+  if (mode === 'single_sunday') return day === 0;
+  if (mode === 'single_saturday') return day === 6;
+  if (mode === 'custom') return settings.habits.customRestDays.includes(day);
+  if (mode === 'alternate_weekends') {
+    if (day !== 0 && day !== 6) return false;
+    const start = new Date(`${settings.habits.alternateWeekendStartsOn || '2026-01-03'}T12:00:00`);
+    const diffWeeks = Math.floor((date.getTime() - start.getTime()) / (7 * 24 * 60 * 60 * 1000));
+    return diffWeeks % 2 === 0 ? day === 0 || day === 6 : day === 0;
+  }
+  return false;
+}
+
+function isLegalHoliday(dateText: string) {
+  return legalHolidayDates.has(dateText) || ['01-01', '05-01', '10-01', '10-02', '10-03'].includes(dateText.slice(5));
+}
+
+function isAdjustedWorkday(dateText: string) {
+  return adjustedWorkdayDates.has(dateText);
+}
+
+const legalHolidayDates = new Set([
+  '2026-01-01',
+  '2026-01-02',
+  '2026-01-03',
+  '2026-02-15',
+  '2026-02-16',
+  '2026-02-17',
+  '2026-02-18',
+  '2026-02-19',
+  '2026-02-20',
+  '2026-02-21',
+  '2026-02-22',
+  '2026-02-23',
+  '2026-04-04',
+  '2026-04-05',
+  '2026-04-06',
+  '2026-05-01',
+  '2026-05-02',
+  '2026-05-03',
+  '2026-05-04',
+  '2026-05-05',
+  '2026-06-19',
+  '2026-06-20',
+  '2026-06-21',
+  '2026-09-25',
+  '2026-09-26',
+  '2026-09-27',
+  '2026-10-01',
+  '2026-10-02',
+  '2026-10-03',
+  '2026-10-04',
+  '2026-10-05',
+  '2026-10-06',
+  '2026-10-07'
+]);
+
+const adjustedWorkdayDates = new Set([
+  '2026-01-04',
+  '2026-02-14',
+  '2026-02-28',
+  '2026-05-09',
+  '2026-09-20',
+  '2026-10-10'
+]);
+
+function showTimePicker(input: HTMLInputElement) {
+  try {
+    input.showPicker?.();
+  } catch {
+    input.focus();
+  }
+}
+
+function isFreshReminderTrigger(reminder: CalendarReminder, now: Date) {
+  if (!reminder.updatedAt) return false;
+  return now.getTime() - new Date(reminder.updatedAt).getTime() <= 90_000;
+}
+
+function hasActiveInteractionState(state: {
+  message: string;
+  pendingClarification: ParseResult | null;
+  pendingDecision: ParseResult | null;
+  pendingPostCommit: PostCommitAction | null;
+  pendingModification: PostCommitAction | null;
+  input: string;
+  voiceDisplayText: string;
+  catProcessStatus: string;
+  isListening: boolean;
+  isThinking: boolean;
+}) {
+  return Boolean(
+    state.message ||
+    state.pendingClarification ||
+    state.pendingDecision ||
+    state.pendingPostCommit ||
+    state.pendingModification ||
+    state.input ||
+    state.voiceDisplayText ||
+    state.catProcessStatus ||
+    state.isListening ||
+    state.isThinking
+  );
+}
+
+function getGreetingPeriod(now: Date) {
+  const hour = now.getHours();
+  if (hour < 5) return 'late-night';
+  if (hour < 11) return 'morning';
+  if (hour < 14) return 'noon';
+  if (hour < 18) return 'afternoon';
+  if (hour < 22) return 'evening';
+  return 'night';
+}
+
+function getTimeGreeting(now: Date, settings: AppSettings) {
+  const period = getGreetingPeriod(now);
+  const lines: Record<string, string[]> = {
+    'late-night': [
+      '还没休息呀，先把最要紧的一件事放下就好。',
+      '这么晚还在，我陪你收个小尾巴，等会儿早点睡。',
+      '夜深啦，今天已经很辛苦了，别把自己绷太紧。'
+    ],
+    morning: [
+      '早上好呀，新的一天慢慢开始，今天想先做什么？',
+      '早呀，先放一件最重要的小事进来吧。',
+      '早上好，今天也一起稳稳推进。'
+    ],
+    noon: [
+      '中午好呀，吃饭和休息也算计划的一部分。',
+      '中午到啦，下午要推进哪一块？',
+      '先喘口气也可以，等会儿再安排下一件事。'
+    ],
+    afternoon: [
+      '下午好呀，现在适合把计划收拢一下。',
+      '下午继续加油，今天还想完成哪一块？',
+      '我在这儿，随时可以帮你把安排落到时间上。'
+    ],
+    evening: [
+      '晚上好呀，今天打算做什么呢？',
+      '晚上啦，今天也努力了一天，真棒。',
+      '要不要把今晚最重要的一件事先安排好？'
+    ],
+    night: [
+      `这么晚了，${settings.habits.sleepStart ? `你平时 ${settings.habits.sleepStart} 左右休息，` : ''}早点收尾呀。`,
+      '今天也辛苦啦，剩下的事可以轻轻放进明天。',
+      '夜里适合少安排一点，先照顾好自己。'
+    ]
+  };
+  const options = lines[period] ?? lines.evening;
+  const index = Math.abs(now.getDate() + now.getHours()) % options.length;
+  return options[index];
+}
+
+function getDesktopCatDialogPayload(state: {
+  message: string;
+  dialogMessages: DesktopCatDialogMessage[];
+  pendingClarification: ParseResult | null;
+  pendingDecision: ParseResult | null;
+  pendingPostCommit: PostCommitAction | null;
+  pendingModification: PostCommitAction | null;
+  parsePreview: ParseResult | null;
+  input: string;
+  voiceDisplayText: string;
+  catProcessStatus: string;
+  isListening: boolean;
+  isThinking: boolean;
+}): DesktopCatDialogPayload {
+  const messages: DesktopCatDialogMessage[] = [...state.dialogMessages];
+  const hasDialogHistory = messages.length > 0;
+  const addMessage = (role: DesktopCatDialogMessage['role'], text: string, muted = false) => {
+    const value = text.trim();
+    if (!value) return;
+    messages.push({ id: `${messages.length}-${role}`, role, text: value, muted });
+  };
+  const addRawText = (result: ParseResult | null) => {
+    if (!result?.rawText) return;
+    addMessage('user', result.rawText);
+  };
+  const toOptions = (result: ParseResult | null): DesktopCatDialogOption[] =>
+    result ? getConflictOptions(result).map((option) => ({ id: option.id, label: option.title })) : [];
+
+  const voiceText = state.input || state.voiceDisplayText;
+
+  if (state.pendingClarification) {
+    if (!hasDialogHistory) {
+      addRawText(state.pendingClarification);
+      addMessage('assistant', state.pendingClarification.questions[0] || '这里还差一点信息，你补一句就好。');
+    }
+    if (state.isListening && voiceText) addMessage('user', voiceText);
+    if (state.isListening) addMessage('input', voiceText ? '我在听，请继续说。' : '我在听。', true);
+    return { type: 'cat-dialog-v1', messages };
+  }
+
+  if (state.pendingDecision) {
+    if (!hasDialogHistory) {
+      addRawText(state.pendingDecision);
+      addMessage('assistant', state.pendingDecision.questions[0] || '这条需要你选一下怎么处理。');
+    }
+    if (state.isListening && voiceText) addMessage('user', voiceText);
+    if (state.isListening) addMessage('input', voiceText ? '我在听，请继续说。' : '我在听。', true);
+    return { type: 'cat-dialog-v1', messages, options: toOptions(state.pendingDecision) };
+  }
+
+  if (state.parsePreview?.questions[0]) {
+    if (!hasDialogHistory) {
+      addRawText(state.parsePreview);
+      addMessage('assistant', state.parsePreview.questions[0]);
+    }
+    if (state.isListening && voiceText) addMessage('user', voiceText);
+    if (state.isListening) addMessage('input', voiceText ? '我在听，请继续说。' : '我在听。', true);
+    return { type: 'cat-dialog-v1', messages, options: toOptions(state.parsePreview) };
+  }
+
+  if (state.isListening) {
+    if (voiceText) addMessage('user', voiceText);
+    addMessage('input', voiceText ? '我正在听，请继续说。' : '我正在听，请开始说话。', true);
+    return { type: 'cat-dialog-v1', messages };
+  }
+
+  if (state.catProcessStatus || state.isThinking) {
+    const status = state.catProcessStatus || '理解意图中';
+    if (!hasDialogHistory) addMessage('user', voiceText);
+    addMessage('system', status, true);
+    return { type: 'cat-dialog-v1', messages };
+  }
+
+  if (state.parsePreview) {
+    if (!hasDialogHistory) {
+      addRawText(state.parsePreview);
+      addMessage('assistant', getDesktopParsePreviewMessage(state.parsePreview));
+    }
+    return { type: 'cat-dialog-v1', messages, options: toOptions(state.parsePreview) };
+  }
+
+  if (state.pendingPostCommit) {
+    addMessage('assistant', `已加好：${state.pendingPostCommit.title}`);
+    return { type: 'cat-dialog-v1', messages };
+  }
+
+  if (state.pendingModification) {
+    if (!hasDialogHistory) addMessage('assistant', '直接说要怎么改，比如换日期或加准备事项。');
+    addMessage('input', '我正在听，请继续说。', true);
+    return { type: 'cat-dialog-v1', messages };
+  }
+
+  if (voiceText && !hasDialogHistory) addMessage('user', voiceText);
+  if (state.message) addMessage('assistant', state.message);
+  return { type: 'cat-dialog-v1', messages };
+}
+
+function getDesktopParsePreviewMessage(result: ParseResult) {
+  if (result.needsConfirmation) {
+    if (getPlanDraft(result)) return result.questions[0] ? '' : '可以确认、修改或取消。';
+    if (getBatchOperation(result) || result.candidates?.length) return '我列出候选了，可以确认或取消。';
+    if (result.questions[0]) return `还差一点：${result.questions[0]}`;
+  }
+  const previewText = getPreviewText(result);
+  if (previewText && previewText !== '准备记录') {
+    return `我整理好了：${previewText}`;
+  }
+  const rewrittenText = result.transcription?.correctedText?.trim() || result.rawText.trim();
+  if (rewrittenText) return `我听到：${rewrittenText}`;
+  return '我整理好了，你看一下确认卡片。';
+}
+
+function shouldAutoCommitDesktopVoicePreview(result: ParseResult) {
+  const simpleAutoCommitIntents: ParsedIntent[] = ['add_event', 'add_task', 'add_reminder', 'start_work', 'pause_work', 'resume_work', 'finish_work', 'progress_update'];
+  return simpleAutoCommitIntents.includes(result.intent) &&
+    !result.needsConfirmation &&
+    !result.draft &&
+    !result.batchOperation &&
+    !result.candidates?.length &&
+    getConflictOptions(result).length === 0;
+}
+
 function getDayStateClass(dateText: string, now: Date) {
   const today = toLocalDateText(now);
   if (dateText < today) return 'day-past';
@@ -2747,31 +4670,78 @@ function getTypeLabel(type: string) {
   return labels[type] ?? '安排';
 }
 
-const dayStartHour = 7;
-const dayEndHour = 24;
-const dayMinutes = (dayEndHour - dayStartHour) * 60;
+type ScheduleRange = { startHour: number; endHour: number; dayMinutes: number; sleepBlocks: SleepBlock[] };
+type SleepBlock = { start: number; end: number };
 
-function getHourMarks() {
-  return Array.from({ length: dayEndHour - dayStartHour + 1 }, (_, index) => dayStartHour + index);
+const compressedSleepMinutes = 60;
+const defaultScheduleRange: ScheduleRange = { startHour: 0, endHour: 24, dayMinutes: 24 * 60, sleepBlocks: [] };
+
+function getScheduleRange(settings: AppSettings): ScheduleRange {
+  const startHour = Math.min(24, Math.max(0, Math.round(settings.ui.dayStartHour ?? 0)));
+  const endHour = Math.min(24, Math.max(0, Math.round(settings.ui.dayEndHour ?? 24)));
+  const safeStart = startHour === 0 && endHour === 24 ? 0 : 0;
+  const safeEnd = startHour === 0 && endHour === 24 ? 24 : 24;
+  const sleepBlocks = getSleepBlocks(settings, safeStart, safeEnd);
+  const compressedMinutes = sleepBlocks.reduce((total, block) => total + Math.max(0, block.end - block.start - compressedSleepMinutes), 0);
+  return { startHour: safeStart, endHour: safeEnd, dayMinutes: (safeEnd - safeStart) * 60 - compressedMinutes, sleepBlocks };
 }
 
-function getHourMarkStyle(hour: number) {
+function getHourMarks(range = defaultScheduleRange) {
+  return Array.from({ length: range.endHour - range.startHour + 1 }, (_, index) => range.startHour + index)
+    .filter((hour) => !isMinuteInsideSleepInterior(hour * 60, range));
+}
+
+function getHourMarkStyle(hour: number, range = defaultScheduleRange) {
   return {
-    top: `${clampPercent(((hour - dayStartHour) * 60 / dayMinutes) * 100)}%`
+    top: `${clampPercent((mapActualMinuteToDisplay(hour * 60, range) / range.dayMinutes) * 100)}%`
   };
 }
 
-function getMinorTimeMarks() {
+function getMinorTimeMarks(range = defaultScheduleRange) {
   const marks: number[] = [];
-  for (let minutes = 30; minutes < dayMinutes; minutes += 30) {
-    if (minutes % 60 !== 0) marks.push(minutes);
+  for (let minutes = range.startHour * 60 + 30; minutes < range.endHour * 60; minutes += 30) {
+    if (minutes % 60 !== 0 && !isMinuteInsideSleepInterior(minutes, range)) {
+      marks.push(mapActualMinuteToDisplay(minutes, range));
+    }
   }
   return marks;
 }
 
-function getMinuteMarkStyle(minutesFromStart: number) {
+function getSleepBlocks(settings: AppSettings, startHour: number, endHour: number): SleepBlock[] {
+  const sleepStart = parseTimeToMinutes(settings.habits.sleepStart || '22:00');
+  const wakeUp = parseTimeToMinutes(settings.habits.wakeUp || '06:00');
+  if (sleepStart === wakeUp) return [];
+  const blocks = sleepStart < wakeUp
+    ? [{ start: sleepStart, end: wakeUp }]
+    : [
+        { start: 0, end: wakeUp },
+        { start: sleepStart, end: 24 * 60 }
+      ];
+  const rangeStart = startHour * 60;
+  const rangeEnd = endHour * 60;
+  return blocks
+    .map((block) => ({ start: Math.max(block.start, rangeStart), end: Math.min(block.end, rangeEnd) }))
+    .filter((block) => block.end - block.start >= 15);
+}
+
+function parseTimeToMinutes(value: string) {
+  const [hourText = '0', minuteText = '0'] = value.split(':');
+  const hour = Math.min(23, Math.max(0, Number(hourText) || 0));
+  const minute = Math.min(59, Math.max(0, Number(minuteText) || 0));
+  return hour * 60 + minute;
+}
+
+function getSleepBlockStyle(block: SleepBlock, range = defaultScheduleRange) {
+  const top = mapActualMinuteToDisplay(block.start, range);
   return {
-    top: `${clampPercent((minutesFromStart / dayMinutes) * 100)}%`
+    top: `${clampPercent((top / range.dayMinutes) * 100)}%`,
+    height: `${clampPercent((compressedSleepMinutes / range.dayMinutes) * 100)}%`
+  };
+}
+
+function getMinuteMarkStyle(minutesFromStart: number, range = defaultScheduleRange) {
+  return {
+    top: `${clampPercent((minutesFromStart / range.dayMinutes) * 100)}%`
   };
 }
 
@@ -2786,60 +4756,106 @@ function toLocalDateText(date: Date) {
   return `${year}-${month}-${day}`;
 }
 
-function getMinutesFromDayStart(value: Date) {
-  return value.getHours() * 60 + value.getMinutes() - dayStartHour * 60;
+function getMinutesFromDayStart(value: Date, range = defaultScheduleRange) {
+  const minutes = value.getHours() * 60 + value.getMinutes();
+  return mapActualMinuteToDisplay(minutes, range);
 }
 
-function minuteFromClientY(clientY: number, rect: DOMRect) {
+function minuteFromClientY(clientY: number, rect: DOMRect, range = defaultScheduleRange) {
   const ratio = Math.min(1, Math.max(0, (clientY - rect.top) / rect.height));
-  return snapToHalfHour(ratio * dayMinutes);
+  return snapToHalfHour(ratio * range.dayMinutes);
 }
 
 function snapToHalfHour(minutes: number) {
   return Math.round(minutes / 30) * 30;
 }
 
-function clampMinute(minutes: number) {
-  return Math.min(dayMinutes, Math.max(0, minutes));
+function clampMinute(minutes: number, range = defaultScheduleRange) {
+  return Math.min(range.dayMinutes, Math.max(0, minutes));
 }
 
-function makeLocalDateTime(date: string, minutesFromStart: number) {
+function makeLocalDateTime(date: string, minutesFromStart: number, range = defaultScheduleRange) {
   const dateTime = new Date(`${date}T00:00:00`);
-  dateTime.setMinutes(dayStartHour * 60 + clampMinute(minutesFromStart));
+  dateTime.setMinutes(mapDisplayMinuteToActual(clampMinute(minutesFromStart, range), range));
   return dateTime.toISOString();
+}
+
+function isMinuteInsideSleepInterior(minute: number, range = defaultScheduleRange) {
+  return range.sleepBlocks.some((block) => minute > block.start && minute < block.end);
+}
+
+function mapActualMinuteToDisplay(minute: number, range = defaultScheduleRange) {
+  const rangeStart = range.startHour * 60;
+  const rangeEnd = range.endHour * 60;
+  const clamped = Math.min(rangeEnd, Math.max(rangeStart, minute));
+  let display = clamped - rangeStart;
+  for (const block of range.sleepBlocks) {
+    const duration = block.end - block.start;
+    const compression = Math.max(0, duration - compressedSleepMinutes);
+    const blockDisplayStart = block.start - rangeStart - range.sleepBlocks
+      .filter((item) => item.end <= block.start)
+      .reduce((total, item) => total + Math.max(0, item.end - item.start - compressedSleepMinutes), 0);
+
+    if (clamped >= block.end) {
+      display -= compression;
+    } else if (clamped > block.start) {
+      const ratio = (clamped - block.start) / Math.max(1, duration);
+      display = blockDisplayStart + ratio * compressedSleepMinutes;
+      break;
+    }
+  }
+  return display;
+}
+
+function mapDisplayMinuteToActual(displayMinute: number, range = defaultScheduleRange) {
+  const rangeStart = range.startHour * 60;
+  let compressedBefore = 0;
+  for (const block of range.sleepBlocks) {
+    const duration = block.end - block.start;
+    const blockDisplayStart = block.start - rangeStart - compressedBefore;
+    const blockDisplayEnd = blockDisplayStart + compressedSleepMinutes;
+    if (displayMinute < blockDisplayStart) break;
+    if (displayMinute <= blockDisplayEnd) {
+      const ratio = (displayMinute - blockDisplayStart) / compressedSleepMinutes;
+      return block.start + ratio * duration;
+    }
+    compressedBefore += Math.max(0, duration - compressedSleepMinutes);
+  }
+  return rangeStart + displayMinute + compressedBefore;
 }
 
 function clampPercent(value: number) {
   return Math.min(100, Math.max(0, value));
 }
 
-function getNowLineStyle(now: Date) {
+function getNowLineStyle(now: Date, range = defaultScheduleRange) {
   return {
-    top: `${clampPercent((getMinutesFromDayStart(now) / dayMinutes) * 100)}%`
+    top: `${clampPercent((getMinutesFromDayStart(now, range) / range.dayMinutes) * 100)}%`
   };
 }
 
-function getPastShadeStyle(now: Date) {
+function getPastShadeStyle(now: Date, range = defaultScheduleRange) {
   return {
-    height: `${clampPercent((getMinutesFromDayStart(now) / dayMinutes) * 100)}%`
+    height: `${clampPercent((getMinutesFromDayStart(now, range) / range.dayMinutes) * 100)}%`
   };
 }
 
-function getEventStyle(startAt?: string, endAt?: string, lane = 0, laneCount = 1) {
+function getEventStyle(startAt?: string, endAt?: string, lane = 0, laneCount = 1, range = defaultScheduleRange) {
   if (!startAt) return {};
   const start = new Date(startAt);
   const end = endAt ? new Date(endAt) : new Date(start.getTime() + 60 * 60 * 1000);
-  const startMinutes = getMinutesFromDayStart(start);
-  const durationMinutes = Math.max(30, (end.getTime() - start.getTime()) / 60_000);
+  const startMinutes = getMinutesFromDayStart(start, range);
+  const endMinutes = getMinutesFromDayStart(end, range);
+  const durationMinutes = Math.max(30, endMinutes - startMinutes);
   const safeLaneCount = Math.max(1, laneCount);
   const gap = 4;
   const widthPercent = 100 / safeLaneCount;
 
   return {
-    height: `${clampPercent((durationMinutes / dayMinutes) * 100)}%`,
+    height: `${clampPercent((durationMinutes / range.dayMinutes) * 100)}%`,
     left: `calc(${lane * widthPercent}% + ${lane > 0 ? gap : 0}px)`,
     right: 'auto',
-    top: `${clampPercent((startMinutes / dayMinutes) * 100)}%`,
+    top: `${clampPercent((startMinutes / range.dayMinutes) * 100)}%`,
     width: `calc(${widthPercent}% - ${lane > 0 ? gap : 0}px)`
   };
 }
@@ -2848,7 +4864,7 @@ function getDeadlineStyle(dueAt?: string | null) {
   if (!dueAt) return {};
   const minutes = getMinutesFromDayStart(new Date(dueAt));
   return {
-    top: `${clampPercent((minutes / dayMinutes) * 100)}%`
+    top: `${clampPercent((minutes / defaultScheduleRange.dayMinutes) * 100)}%`
   };
 }
 
@@ -2917,20 +4933,16 @@ function buildProjectTodoGroups(projects: TodoProject[], tasks: TaskListItem[]) 
   return Array.from(groups.values())
     .map((group) => ({
       ...group,
-      tasks: group.tasks.sort((a, b) => {
-        const doneOrder = Number(a.status === 'done') - Number(b.status === 'done');
-        if (doneOrder !== 0) return doneOrder;
-        return (a.dueAt ?? a.createdAt).localeCompare(b.dueAt ?? b.createdAt);
-      })
+      tasks: group.tasks.sort(compareTodoTasks)
     }))
-    .sort((a, b) => {
-      const openOrder = Number(a.openCount === 0) - Number(b.openCount === 0);
-      if (openOrder !== 0) return openOrder;
-      return a.projectTitle.localeCompare(b.projectTitle, 'zh-CN');
-    });
+    .sort((a, b) => compareTodoProjects(a.project, b.project));
 }
 
 type ProjectTodoGroup = ReturnType<typeof buildProjectTodoGroups>[number];
+
+function isUncategorizedTodoProject(project: Pick<TodoProject, 'id' | 'title'>) {
+  return project.id === 'uncategorized' || project.title.trim() === '未归类';
+}
 
 const coreTodoProjectTitles = ['工作', '学校', '生活'];
 
@@ -2942,6 +4954,24 @@ function getCoreTodoGroups(groups: ProjectTodoGroup[]) {
 
 function getOtherTodoGroups(groups: ProjectTodoGroup[]) {
   return groups.filter((group) => !coreTodoProjectTitles.includes(group.projectTitle));
+}
+
+function compareTodoProjects(a: Pick<TodoProject, 'order' | 'title' | 'createdAt'>, b: Pick<TodoProject, 'order' | 'title' | 'createdAt'>) {
+  const orderA = typeof a.order === 'number' ? a.order : Number.POSITIVE_INFINITY;
+  const orderB = typeof b.order === 'number' ? b.order : Number.POSITIVE_INFINITY;
+  if (orderA !== orderB) return orderA - orderB;
+  const createdOrder = (a.createdAt || '').localeCompare(b.createdAt || '');
+  if (createdOrder !== 0) return createdOrder;
+  return a.title.localeCompare(b.title, 'zh-CN');
+}
+
+function compareTodoTasks(a: Pick<TaskListItem, 'order' | 'status' | 'dueAt' | 'createdAt'>, b: Pick<TaskListItem, 'order' | 'status' | 'dueAt' | 'createdAt'>) {
+  const doneOrder = Number(a.status === 'done') - Number(b.status === 'done');
+  if (doneOrder !== 0) return doneOrder;
+  const orderA = typeof a.order === 'number' ? a.order : Number.POSITIVE_INFINITY;
+  const orderB = typeof b.order === 'number' ? b.order : Number.POSITIVE_INFINITY;
+  if (orderA !== orderB) return orderA - orderB;
+  return (a.dueAt ?? a.createdAt).localeCompare(b.dueAt ?? b.createdAt);
 }
 
 function buildTodoDeadlineDots(tasks: TaskListItem[]) {
@@ -2977,14 +5007,6 @@ function buildMonthCalendarDays(now: Date) {
       inMonth: date.getMonth() === now.getMonth()
     };
   });
-}
-
-function formatTodoMeta(task: TaskListItem) {
-  const parts = [
-    stripTodoDateTags(task.notes ?? '') || '',
-    task.status === 'done' ? '已完成' : ''
-  ].filter(Boolean);
-  return parts.join(' · ') || '添加备注';
 }
 
 function getTodoDateTag(task: TaskListItem) {
@@ -3023,6 +5045,15 @@ function stripTodoDateTags(text: string) {
   return text.replace(/#\d{4}-\d{2}-\d{2}/g, '').replace(/\s+/g, ' ').trim();
 }
 
+function getTextEditorRows(text: string, charsPerLine: number) {
+  const normalized = text || '';
+  const visualRows = normalized.split('\n').reduce((sum, line) => {
+    const wideChars = Array.from(line).reduce((count, char) => count + (/[\u4e00-\u9fff]/.test(char) ? 1.05 : 0.55), 0);
+    return sum + Math.max(1, Math.ceil(wideChars / charsPerLine));
+  }, 0);
+  return Math.max(1, visualRows);
+}
+
 function ProfileBlock({ title, items, empty }: { title: string; items: string[]; empty: string }) {
   const visibleItems = items.filter(Boolean);
   return (
@@ -3037,21 +5068,64 @@ function ProfileBlock({ title, items, empty }: { title: string; items: string[];
   );
 }
 
+function ManualEventEditor({
+  draft,
+  onChange,
+  onSave,
+  onCancel
+}: {
+  draft: ManualEventDraft;
+  onChange: (draft: ManualEventDraft) => void;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  const patch = (value: Partial<ManualEventDraft>) => onChange({ ...draft, ...value });
+  return (
+    <div className="manual-event-editor">
+      <input value={draft.title} onChange={(event) => patch({ title: event.target.value })} placeholder="日程标题" autoFocus />
+      <div className="manual-event-time-row">
+        <input type="date" value={draft.date} onChange={(event) => patch({ date: event.target.value })} />
+        <input type="time" value={draft.startTime} step="1800" onChange={(event) => patch({ startTime: event.target.value })} />
+        <input type="time" value={draft.endTime} step="1800" onChange={(event) => patch({ endTime: event.target.value })} />
+      </div>
+      <select value={draft.type} onChange={(event) => patch({ type: event.target.value as CalendarItem['type'] })}>
+        <option value="other">日程</option>
+        <option value="meeting">会议</option>
+        <option value="task_block">任务块</option>
+        <option value="life">生活</option>
+        <option value="exercise">运动</option>
+        <option value="meal">吃饭</option>
+        <option value="rest">休息</option>
+      </select>
+      <textarea rows={2} value={draft.preparationsText} onChange={(event) => patch({ preparationsText: event.target.value })} placeholder="准备事项" />
+      <textarea rows={2} value={draft.notes} onChange={(event) => patch({ notes: event.target.value })} placeholder="备注" />
+      <div className="manual-event-actions">
+        <button type="button" onClick={onSave}>确定</button>
+        <button type="button" onClick={onCancel}>取消</button>
+      </div>
+    </div>
+  );
+}
+
 function InputUnderstandingCard({ result, onSelectOption }: { result: ParseResult; onSelectOption: (optionId?: string) => void }) {
   const options = getConflictOptions(result);
   const rows = getUnderstandingRows(result);
+  const draft = getPlanDraft(result);
+  const batch = getBatchOperation(result);
+  const candidates = result.candidates ?? batch?.candidates ?? [];
 
   return (
     <div className={`parse-preview understanding-card ${result.needsConfirmation ? 'parse-warning' : ''}`}>
       <div className="understanding-head">
-        <span>{result.needsConfirmation ? '需要确认' : '小猫理解中'}</span>
+        <span>{result.needsConfirmation ? '等待确认' : '已整理'}</span>
         <strong>{getIntentLabel(result.intent)}</strong>
         {result.preview.parser === 'deepseek' ? <small className="ai-participation">DeepSeek 参与</small> : null}
       </div>
       {result.transcription ? (
-        <small className="transcription-correction">
-          已修正转写：{result.transcription.correctedText}
-        </small>
+        <div className="transcription-correction">
+          <small>实时转写：{result.transcription.originalText}</small>
+          <small>AI改写：{result.transcription.correctedText}</small>
+        </div>
       ) : null}
       <div className="understanding-rows">
         {rows.map((row) => (
@@ -3061,6 +5135,25 @@ function InputUnderstandingCard({ result, onSelectOption }: { result: ParseResul
           </div>
         ))}
       </div>
+      {draft ? (
+        <div className="understanding-draft-list">
+          {draft.items.slice(0, 6).map((item) => (
+            <small key={item.id}>
+              {getDraftKindLabel(item.kind)} · {item.title}
+              {item.startAt ? ` · ${formatPreviewTime(item.startAt, item.endAt)}` : item.dueAt ? ` · ${formatPreviewTime(item.dueAt)}` : item.remindAt ? ` · ${formatPreviewTime(item.remindAt)}` : ' · 待补充'}
+              {item.risk ? ` · ${item.risk}` : ''}
+            </small>
+          ))}
+          {draft.assumptions.length ? <small>推断：{draft.assumptions.slice(0, 2).join('；')}</small> : null}
+        </div>
+      ) : null}
+      {candidates.length ? (
+        <div className="understanding-draft-list">
+          {candidates.slice(0, 6).map((item) => (
+            <small key={item.id}>{getDraftKindLabel(item.kind)} · {item.title}{item.detail ? ` · ${item.detail}` : ''}</small>
+          ))}
+        </div>
+      ) : null}
       {result.questions[0] ? <p className="understanding-question">{result.questions[0]}</p> : null}
       {options.length > 0 ? (
         <div className="conflict-options">
@@ -3069,6 +5162,10 @@ function InputUnderstandingCard({ result, onSelectOption }: { result: ParseResul
               {option.title}
             </button>
           ))}
+        </div>
+      ) : !result.needsConfirmation ? (
+        <div className="conflict-options">
+          <button onClick={() => onSelectOption()}>确认记录</button>
         </div>
       ) : null}
     </div>
@@ -3134,11 +5231,18 @@ function PostCommitCard({
 }
 
 function getEventOperationIntent(text: string, parsed?: ParseResult | null): 'delete_event' | 'update_event' | 'annotate_event' | null {
+  if (isExplicitNewEventText(text)) return null;
   if (parsed?.intent === 'delete_event' || parsed?.intent === 'update_event' || parsed?.intent === 'annotate_event') return parsed.intent;
   if (/(删掉|删除|取消|撤掉|去掉|不要了|不用了)/.test(text) && /(会|会议|开会|面试|上课|课程|安排|日程)/.test(text)) return 'delete_event';
   if (/(备注|补充|带上|带|准备|加上|说明)/.test(text) && /(会|会议|开会|面试|上课|课程|安排|日程)/.test(text)) return 'annotate_event';
   if (/(改|修改|改到|改成|改为|重新安排|不是|换到|挪到|提前|推迟)/.test(text) && /(会|会议|开会|面试|上课|课程|安排|日程)/.test(text)) return 'update_event';
   return null;
+}
+
+function isExplicitNewEventText(text: string) {
+  return /(有一?个|有场|安排一?个|新增一?个|加一?个|记一?个|我要|我想|打算|需要|明天|后天|今天|上午|下午|晚上|\d{1,2}[点:：]|一?个小时|半小时|两小时|俩小时)/.test(text) &&
+    /(面试|会议|开会|上课|课程|日程|安排)/.test(text) &&
+    !/(已有|刚才|上次|那[个场条]|这[个场条]|备注|补充|带上|加上说明)/.test(text);
 }
 
 function isMeetingLikeItem(item: CalendarItem) {
@@ -3279,23 +5383,95 @@ function buildInputForCommit(text: string, pending: ParseResult | null, decision
   return `${pending.rawText}，补充信息：${text}`;
 }
 
+function getPlanDraft(result: ParseResult): PlanDraft | null {
+  if (result.draft) return result.draft;
+  const draft = result.preview.draft;
+  return isPlanDraft(draft) ? draft : null;
+}
+
+function getBatchOperation(result: ParseResult): BatchOperationPreview | null {
+  if (result.batchOperation) return result.batchOperation;
+  const batch = result.preview.batchOperation;
+  return isBatchOperationPreview(batch) ? batch : null;
+}
+
+function isPlanDraft(value: unknown): value is PlanDraft {
+  return Boolean(value && typeof value === 'object' && Array.isArray((value as PlanDraft).items));
+}
+
+function isBatchOperationPreview(value: unknown): value is BatchOperationPreview {
+  return Boolean(value && typeof value === 'object' && Array.isArray((value as BatchOperationPreview).candidates));
+}
+
+function getDraftKindLabel(kind: PlanDraftItem['kind'] | CandidateItem['kind']) {
+  const labels: Record<string, string> = {
+    event: '日程',
+    task: '待办',
+    reminder: '提醒',
+    profile_update: '画像',
+    habit_rule: '周期',
+    project: '项目',
+    profile: '画像'
+  };
+  return labels[kind] ?? '候选';
+}
+
+function getBatchActionLabel(action: BatchOperationPreview['action']) {
+  const labels: Record<BatchOperationPreview['action'], string> = {
+    delete: '删除',
+    update_time: '移动时间',
+    move_project: '移动项目',
+    move_date: '移动日期',
+    update_status: '修改状态'
+  };
+  return labels[action];
+}
+
 function getShortTitle(title: string) {
   const normalized = title
     .replace(/^我要?/, '')
+    .replace(/^要去/, '')
+    .replace(/^去/, '')
     .replace(/^需要/, '')
     .replace(/^今天/, '')
     .replace(/^今晚/, '')
+    .replace(/^(上午|下午|晚上|早上|中午)/, '')
+    .replace(/的?安排$/, '')
     .trim();
 
+  if (/健身房|健身|训练|运动/.test(normalized)) return '健身';
   if (normalized.includes('开会') || normalized.includes('会议')) return '开会';
   if (normalized.includes('上课') || normalized.includes('课程')) return '上课';
   if (normalized.includes('面试')) return '面试';
+  if (/(skill|技能|规则|prompt|提示词)/i.test(normalized) && /(改|修|重构|更新|沉淀|优化)/.test(normalized)) return normalized.includes('重构') ? '重构' : '改skill';
+  if (/重构我/.test(normalized)) return '重构';
+  if (/(重构|重写|改造)/.test(normalized)) return '重构';
+  if (/(修改|改一下|改改|修一下|修复)/.test(normalized)) return '修改';
+  if (/(优化|精修|打磨)/.test(normalized)) return '优化';
+  if (normalized.includes('吃饭') || normalized.includes('晚饭') || normalized.includes('午饭')) return '吃饭';
+  if (normalized.includes('睡觉') || normalized.includes('休息')) return '休息';
+  if (normalized.includes('写') && normalized.includes('简历')) return '简历';
+  if (normalized.includes('调试') || normalized.includes('测试')) return '调试';
   if (normalized.includes('提醒')) return normalized.replace(/.*提醒我?/, '').slice(0, 8) || '提醒';
-  if (normalized.length <= 8) return normalized || title;
-  return `${normalized.slice(0, 8)}…`;
+  if (normalized.length <= 3) return normalized || title.slice(0, 3);
+  return normalized.slice(0, 3);
 }
 
 function getUnderstandingRows(result: ParseResult) {
+  const draft = getPlanDraft(result);
+  if (draft) {
+    return [
+      { label: '标题', value: '整组草稿' },
+      { label: '具体内容', value: `${draft.items.length} 项草稿：${draft.items.map((item) => item.title).slice(0, 4).join('、')}` }
+    ];
+  }
+  const batch = getBatchOperation(result);
+  if (batch) {
+    return [
+      { label: '标题', value: '批量候选清单' },
+      { label: '具体内容', value: `${batch.candidates.length} 个候选，动作：${getBatchActionLabel(batch.action)}` }
+    ];
+  }
   const fields = result.fields;
   const rows: Array<{ label: string; value: string }> = [];
   const title = typeof fields.title === 'string' ? fields.title : undefined;
@@ -3397,7 +5573,11 @@ function getIntentLabel(intent: ParsedIntent) {
     finish_work: '结束',
     progress_update: '进度',
     add_reminder: '提醒',
-    review_note: '复盘'
+    review_note: '复盘',
+    plan_draft: '整组草稿',
+    batch_operation: '批量操作',
+    profile_update: '画像 / 作息',
+    habit_rule: '习惯周期'
   };
   return labels[intent];
 }
@@ -3432,6 +5612,11 @@ function isConflictOption(value: unknown): value is ConflictOption {
 function getCommitMessage(result?: ParseResult, resolvedBy?: string, feedback?: string) {
   if (feedback) return feedback;
   if (!result) return '记下来了，安排先放进口袋。';
+  if (resolvedBy === 'confirm-draft') return '整组草稿已确认写入。';
+  if (resolvedBy === 'cancel-draft') return '草稿已取消，没有写入正式数据。';
+  if (resolvedBy === 'hold-draft') return '已先放进待定草稿，没有写入正式日程。';
+  if (resolvedBy === 'execute-batch') return '批量操作已执行。';
+  if (resolvedBy === 'profile-update') return '画像和作息已更新。';
   if (resolvedBy === 'save-pending') return '已放进待补充事项。';
   if (resolvedBy === 'keep-both') return '已重叠新增。';
   if (resolvedBy === 'task-split') return '任务先记成待拆分。';
@@ -3452,7 +5637,11 @@ function getCommitMessage(result?: ParseResult, resolvedBy?: string, feedback?: 
     finish_work: '结束记录好了，今天又往前推了一点。',
     progress_update: '进度记下来了，后面重排会用上。',
     add_reminder: '提醒设好了，到点会在这里冒出来。',
-    review_note: '复盘原因收好了，下次计划会更贴近现实。'
+    review_note: '复盘原因收好了，下次计划会更贴近现实。',
+    plan_draft: '整组草稿已准备好。',
+    batch_operation: '批量候选已准备好。',
+    profile_update: '画像和作息已更新。',
+    habit_rule: '周期安排已准备好。'
   };
   return messages[result.intent];
 }

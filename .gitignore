@@ -1,5 +1,8 @@
 node_modules/
 dist/
+dist-server/
+docs/dist-server/
+release/
 .vite/
 .run-logs/
 personal-assistant-data/

@@ -1,0 +1,483 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>YayaMind Bubble</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: transparent;
+        user-select: none;
+      }
+
+      body {
+        align-items: end;
+        display: grid;
+        justify-items: center;
+        padding-bottom: 2px;
+      }
+
+      .message {
+        align-self: end;
+        background: rgba(255, 248, 239, 0.96);
+        border: 1px solid rgba(216, 111, 56, 0.22);
+        border-radius: 12px 14px 10px 13px;
+        box-shadow: 0 12px 30px rgba(92, 62, 38, 0.2);
+        color: #4a3021;
+        display: none;
+        font: 13px/1.45 "Microsoft YaHei UI", "Segoe UI", sans-serif;
+        margin: 0 10px -2px;
+        max-height: min(286px, calc(100vh - 94px));
+        overflow: auto;
+        padding: 10px 34px 10px 12px;
+        pointer-events: auto;
+        position: relative;
+        text-align: left;
+        width: min(348px, calc(100vw - 20px));
+      }
+
+      .message.visible {
+        display: block;
+      }
+
+      .message-cancel {
+        align-items: center;
+        background: rgba(74, 48, 33, 0.08);
+        border: 1px solid rgba(74, 48, 33, 0.14);
+        border-radius: 999px;
+        color: rgba(74, 48, 33, 0.78);
+        cursor: pointer;
+        display: grid;
+        font: 15px/1 "Segoe UI", sans-serif;
+        height: 22px;
+        padding: 0;
+        place-items: center;
+        position: absolute;
+        right: 7px;
+        top: 7px;
+        width: 22px;
+      }
+
+      .message-cancel:hover {
+        background: rgba(74, 48, 33, 0.14);
+        color: #4a3021;
+      }
+
+      .message-body {
+        display: block;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .dialog-list {
+        display: grid;
+        gap: 7px;
+      }
+
+      .dialog-bubble {
+        border-radius: 10px;
+        max-width: 100%;
+        padding: 7px 9px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .dialog-bubble.user {
+        background: rgba(255, 255, 255, 0.66);
+        border: 1px solid rgba(74, 48, 33, 0.1);
+        color: #5d3a28;
+      }
+
+      .dialog-bubble.assistant {
+        background: rgba(255, 232, 211, 0.74);
+        border: 1px solid rgba(216, 111, 56, 0.2);
+      }
+
+      .dialog-bubble.system,
+      .dialog-bubble.input {
+        background: rgba(74, 48, 33, 0.06);
+        border: 1px dashed rgba(74, 48, 33, 0.16);
+        color: rgba(74, 48, 33, 0.58);
+      }
+
+      .dialog-options {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 8px;
+      }
+
+      .dialog-option {
+        background: #fff7ed;
+        border: 1px solid rgba(216, 111, 56, 0.36);
+        border-radius: 999px;
+        color: #8a3d1f;
+        cursor: pointer;
+        font: 12px/1 "Microsoft YaHei UI", "Segoe UI", sans-serif;
+        min-height: 26px;
+        padding: 0 10px;
+      }
+
+      .dialog-option:hover {
+        background: #ffe8d4;
+      }
+
+      .message-status {
+        color: rgba(74, 48, 33, 0.54);
+        display: block;
+        font-size: 11px;
+        line-height: 1.35;
+        margin-top: 5px;
+      }
+
+      .bubble {
+        width: 92px;
+        height: 92px;
+        padding: 0;
+        border: 0;
+        border-radius: 999px;
+        position: relative;
+        display: grid;
+        place-items: center;
+        overflow: visible;
+        cursor: grab;
+        background: transparent;
+        -webkit-app-region: no-drag;
+      }
+
+      .bubble.dragging,
+      .bubble.dragging:hover {
+        cursor: grabbing;
+      }
+
+      .avatar {
+        position: absolute;
+        inset: 0;
+        width: 92px;
+        height: 92px;
+        object-fit: contain;
+        pointer-events: none;
+        transition:
+          opacity 180ms ease,
+          transform 180ms ease,
+          filter 180ms ease;
+      }
+
+      .avatar-listening {
+        opacity: 0;
+        transform: translateY(2px) scale(0.98);
+      }
+
+      .state-sleeping .avatar-sleeping {
+        opacity: 1;
+        transform: translateY(1px) scale(1);
+      }
+
+      .state-listening .avatar-sleeping,
+      .state-error .avatar-sleeping {
+        opacity: 0;
+        transform: translateY(4px) scale(0.96);
+      }
+
+      .state-listening .avatar-listening,
+      .state-error .avatar-listening {
+        opacity: 1;
+        transform: translateY(-1px) scale(1);
+      }
+
+      .state-thinking .avatar-sleeping {
+        opacity: 0;
+        transform: translateY(4px) scale(0.96);
+      }
+
+      .state-thinking .avatar-listening {
+        opacity: 1;
+        transform: translateY(-1px) scale(1);
+        filter: saturate(0.9);
+      }
+
+      .pulse {
+        position: absolute;
+        inset: 7px;
+        border: 2px solid rgba(226, 101, 67, 0.42);
+        border-radius: 999px;
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      .state-listening .pulse {
+        animation: listen-pulse 980ms ease-in-out infinite;
+      }
+
+      @keyframes listen-pulse {
+        0% {
+          opacity: 0.2;
+          transform: scale(0.9);
+        }
+        100% {
+          opacity: 0.76;
+          transform: scale(1.08);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="message" id="message">
+      <div class="message-body" id="messageText"></div>
+      <div class="dialog-options" id="dialogOptions"></div>
+      <small class="message-status" id="messageStatus"></small>
+      <button class="message-cancel" id="messageCancel" type="button" aria-label="取消本次对话" title="取消本次对话">×</button>
+    </div>
+    <button class="bubble state-sleeping" id="bubble" type="button" aria-label="YayaMind 小猫助手">
+      <span class="pulse"></span>
+      <img class="avatar avatar-sleeping" src="../src/assets/desktop/cat-sleeping.png" alt="" />
+      <img class="avatar avatar-listening" src="../src/assets/desktop/cat-listening.png" alt="" />
+    </button>
+
+    <script>
+      const bubble = document.getElementById('bubble');
+      const message = document.getElementById('message');
+      const messageText = document.getElementById('messageText');
+      const dialogOptions = document.getElementById('dialogOptions');
+      const messageStatus = document.getElementById('messageStatus');
+      const messageCancel = document.getElementById('messageCancel');
+      const dragThreshold = 8;
+      let pointerDown = false;
+      let dragging = false;
+      let moved = false;
+      let suppressNextClick = false;
+      let singleClickTimer = null;
+      let messageTimer = null;
+      let startX = 0;
+      let startY = 0;
+      let lastInteractive = null;
+
+      const log = (type, detail = {}) => {
+        window.yayaBubble?.log?.(type, detail);
+      };
+
+      const pointerPayload = (event) => ({
+        screenX: Math.round(event.screenX),
+        screenY: Math.round(event.screenY)
+      });
+
+      const setInteractive = (interactive) => {
+        if (lastInteractive === interactive) return;
+        lastInteractive = interactive;
+        window.yayaBubble?.setInteractive?.(interactive);
+      };
+
+      const isPointOnBubble = (event) => {
+        const rect = bubble.getBoundingClientRect();
+        return (
+          event.clientX >= rect.left &&
+          event.clientX <= rect.right &&
+          event.clientY >= rect.top &&
+          event.clientY <= rect.bottom
+        );
+      };
+
+      const isPointOnMessage = (event) => {
+        const rect = message.getBoundingClientRect();
+        return (
+          message.classList.contains('visible') &&
+          event.clientX >= rect.left &&
+          event.clientX <= rect.right &&
+          event.clientY >= rect.top &&
+          event.clientY <= rect.bottom
+        );
+      };
+
+      window.addEventListener('mousemove', (event) => {
+        setInteractive(isPointOnBubble(event) || isPointOnMessage(event));
+      });
+
+      window.addEventListener('mouseleave', () => {
+        setInteractive(false);
+      });
+
+      const setState = (state) => {
+        const isListening = state === 'listening';
+        const isThinking = state === 'thinking';
+        const isError = state === 'error';
+        bubble.classList.toggle('state-listening', isListening);
+        bubble.classList.toggle('state-thinking', isThinking);
+        bubble.classList.toggle('state-error', isError);
+        bubble.classList.toggle('state-sleeping', !isListening && !isThinking && !isError);
+      };
+
+      const clearMessageContent = () => {
+        messageText.textContent = '';
+        dialogOptions.replaceChildren();
+        messageStatus.textContent = '';
+        messageStatus.style.display = 'none';
+      };
+
+      const parseDialogPayload = (text) => {
+        try {
+          const payload = JSON.parse(text);
+          if (payload && payload.type === 'cat-dialog-v1' && Array.isArray(payload.messages)) {
+            return payload;
+          }
+        } catch (_error) {
+          return null;
+        }
+        return null;
+      };
+
+      const renderDialogPayload = (payload) => {
+        window.clearTimeout(messageTimer);
+        clearMessageContent();
+        const visibleMessages = payload.messages.filter((item) => item && String(item.text || '').trim());
+        const options = Array.isArray(payload.options) ? payload.options.filter((item) => item?.id && item?.label) : [];
+        if (!visibleMessages.length && !options.length && !payload.status) {
+          message.classList.remove('visible');
+          return;
+        }
+
+        const list = document.createElement('div');
+        list.className = 'dialog-list';
+        visibleMessages.forEach((item) => {
+          const bubbleNode = document.createElement('div');
+          const role = ['user', 'assistant', 'system', 'input'].includes(item.role) ? item.role : 'assistant';
+          bubbleNode.className = `dialog-bubble ${role}`;
+          bubbleNode.textContent = String(item.text || '').trim();
+          list.appendChild(bubbleNode);
+        });
+        messageText.appendChild(list);
+
+        options.forEach((item) => {
+          const optionButton = document.createElement('button');
+          optionButton.className = 'dialog-option';
+          optionButton.type = 'button';
+          optionButton.textContent = String(item.label || '').trim();
+          optionButton.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            window.yayaBubble?.selectOption?.(String(item.id || ''));
+          });
+          dialogOptions.appendChild(optionButton);
+        });
+
+        if (payload.status) {
+          messageStatus.textContent = String(payload.status);
+          messageStatus.style.display = 'block';
+        }
+        message.classList.add('visible');
+        message.scrollTop = message.scrollHeight;
+      };
+
+      bubble.addEventListener('pointerdown', (event) => {
+        if (event.button !== 0) return;
+        setInteractive(true);
+        pointerDown = true;
+        dragging = false;
+        moved = false;
+        startX = event.screenX;
+        startY = event.screenY;
+        bubble.setPointerCapture(event.pointerId);
+        log('pointer-down');
+      });
+
+      bubble.addEventListener('pointermove', (event) => {
+        if (!pointerDown) return;
+        const distance = Math.max(Math.abs(event.screenX - startX), Math.abs(event.screenY - startY));
+        if (!dragging && distance < dragThreshold) return;
+        if (!dragging) {
+          dragging = true;
+          moved = true;
+          suppressNextClick = true;
+          bubble.classList.add('dragging');
+          log('drag-start');
+          window.yayaBubble.dragStart(pointerPayload(event));
+        }
+        window.yayaBubble.dragMove(pointerPayload(event));
+      });
+
+      bubble.addEventListener('pointerup', (event) => {
+        if (!pointerDown) return;
+        pointerDown = false;
+        if (bubble.hasPointerCapture(event.pointerId)) {
+          bubble.releasePointerCapture(event.pointerId);
+        }
+        if (dragging) {
+          dragging = false;
+          bubble.classList.remove('dragging');
+          window.yayaBubble.dragEnd();
+          log('drag-end');
+        }
+        setInteractive(isPointOnBubble(event));
+      });
+
+      bubble.addEventListener('click', (event) => {
+        if (moved || suppressNextClick) {
+          suppressNextClick = false;
+          event.preventDefault();
+          return;
+        }
+        log('click');
+        window.clearTimeout(singleClickTimer);
+        singleClickTimer = window.setTimeout(() => {
+          log('cat-click-start');
+          setState('listening');
+          window.yayaBubble.startVoice();
+        }, 380);
+      });
+
+      bubble.addEventListener('dblclick', () => {
+        log('double-click');
+        window.clearTimeout(singleClickTimer);
+        window.yayaBubble.openMain();
+      });
+
+      window.yayaBubble.onState((state) => {
+        setState(state);
+      });
+
+      window.yayaBubble.onMessage((text) => {
+        const nextText = String(text || '').trim();
+        const payload = parseDialogPayload(nextText);
+        if (payload) {
+          renderDialogPayload(payload);
+          return;
+        }
+        const lines = nextText.split('\n');
+        const possibleStatus = lines.length > 1 ? lines[lines.length - 1].trim() : '';
+        const isProcessStatus = /^(正在听|文字整理中|理解意图中|安排事项中)$/.test(possibleStatus);
+        const bodyText = isProcessStatus ? lines.slice(0, -1).join('\n').trim() : nextText;
+        window.clearTimeout(messageTimer);
+        clearMessageContent();
+        messageText.textContent = bodyText || (isProcessStatus ? '' : nextText);
+        messageStatus.textContent = isProcessStatus ? possibleStatus : '';
+        messageStatus.style.display = isProcessStatus ? 'block' : 'none';
+        message.classList.toggle('visible', Boolean(nextText));
+        if (nextText && !isProcessStatus) {
+          messageTimer = window.setTimeout(() => {
+            messageText.textContent = '';
+            messageStatus.textContent = '';
+            message.classList.remove('visible');
+          }, 5000);
+        }
+      });
+
+      messageCancel.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        window.clearTimeout(messageTimer);
+        clearMessageContent();
+        message.classList.remove('visible');
+        setState('sleeping');
+        window.yayaBubble.cancelVoice?.();
+      });
+    </script>
+  </body>
+</html>

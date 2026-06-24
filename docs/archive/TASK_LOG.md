@@ -1,5 +1,299 @@
 # TASK_LOG
 
+> 历史遗留资料：本文件只用于按日期或关键词查旧验证证据，不再作为日常开发主读文档，也不再写入普通新记录。新记录优先写入 `PROJECT_CONTEXT.md` 的编号条目；当前任务状态写入 `TODO.md`。
+
+## 2026-06-16 桌面语音链路复盘与经验沉淀
+### 完成
+- 复盘类型：Mixed Review。范围包括本轮真实入口日志、项目任务记录、`productize` 经验库、`productize` Skill，以及记忆中的前两轮桌面小猫/真实入口会话摘要。
+- 复盘结论：此前返工的核心不是“缺一个小补丁”，而是没有把桌面语音当作完整链路验收；多次只修了云转文字、点击状态或气泡文案，漏掉 parse 成功后的 commit 写入和日程刷新。
+- `C:\Users\17978\.codex\skills\productize\PRODUCT_LESSONS.md`：新增经验 021，记录“能理解但不写入”的根因、修法和后续端到端验收口径。
+- `C:\Users\17978\.codex\skills\productize\SKILL.md`：在返工预防规则中新增链路型 bug 检查要求，明确修改前后要回看“输入 -> 中间状态 -> 用户反馈 -> 数据写入 -> 刷新/后续动作 -> 日志证据”。
+- `C:\Users\17978\.codex\memories\extensions\ad_hoc\notes\2026-06-16-yayamind-voice-chain-review.md`：新增本地长期记忆补充，方便后续会话优先召回这次语音链路经验。
+
+## 2026-06-16 桌面语音解析后自动写入日程
+### 完成
+- 先读真实入口日志定位：最新链路已经到 `parse-preview-success`，且示例“下午四点开会明天”返回 `hasQuestions:false`，小猫显示“我整理好了：开会 · 16:00-17:00”，但后续没有 `commit` 事件，因此日程未写入。
+- 根因：Electron 桌面模式隐藏了主界面内的小猫确认卡片；解析成功后既没有用户可点击的“确认记录”，也没有桌面语音专用自动提交。
+- `src/App.tsx`：桌面语音解析成功且 `needsConfirmation=false`、无冲突选项时自动调用 `commitInput(..., source='voice')` 写入日程；需要追问或冲突选择时不自动写入。
+- `src/App.tsx`：补充 `desktop-auto-commit-start`、`commit-start`、`commit-success`、`commit-needs-confirmation`、`commit-failed` 日志，后续可以完整追踪“听写 -> 解析 -> 提交 -> 刷新”链路。
+- 已重新打包并同步到真实入口 `D:\YayaMind`。
+### 验证
+- `node --check electron/main.cjs` 通过。
+- `node --check electron/preload.cjs` 通过。
+- `npm run build` 通过。
+- `npm run desktop:pack` 通过。
+- 真实入口 `/api/bootstrap` 返回 200。
+### 未完全验证
+- 未用假日程直接调用 `/api/input/commit`，避免污染用户真实数据；需要用户再说一句真实安排，确认日志出现 `commit-success` 且日程格子刷新。
+
+## 2026-06-16 小猫气泡移除内部意图标签
+### 完成
+- 先读真实入口日志定位：用户结束听写后链路已进入 `parse-preview-success`，不是 AI 理解中断；气泡显示“我理解成：日程 / 时间块”的原因是 `getDesktopCatMessage()` 把 `parsePreview.intent` 的内部分类标签直接展示给用户。
+- 日志同时显示本次系统听写实际捕获文本为“有个会议要开”，没有捕获到前半句“明天下午4点”，所以解析结果 `hasQuestions: true`，后续应以追问缺失信息的方式反馈。
+- `src/App.tsx`：新增桌面小猫专用解析预览文案。缺字段时显示“还差一点：...”；字段完整时显示“我整理好了：...”；不再在小猫气泡显示“我理解成：日程 / 时间块”。
+- 已重新打包并同步到真实入口 `D:\YayaMind`。
+### 验证
+- `node --check electron/main.cjs` 通过。
+- `node --check electron/preload.cjs` 通过。
+- `npm run build` 通过。
+- `npm run desktop:pack` 通过。
+- 真实入口 `/api/bootstrap` 返回 200。
+
+## 2026-06-16 桌面小猫系统听写停止态与日志补强
+### 完成
+- 先读 `D:\YayaMindData\userData\desktop-cat.log` 定位：最新真实入口第二次点击已不再触发新的 `Win+H`，但停止后小猫状态仍停在 `listening`，且缺少渲染侧“拿到文字 -> 开始解析 -> 解析成功/失败”的结构化日志。
+- `src/App.tsx`：补充 `native-voice-start`、`native-voice-stop-prepare`、`native-voice-stop`、`desktop-recognized-text`、`parse-preview-start/success/error` 日志，后续每次实测可直接按这些事件定位。
+- `src/App.tsx`：结束听写并解析完成后让小猫回到休息态，同时保留“我理解成：...”气泡；思考中仍保持倾听态反馈。
+- `electron/main.cjs`：补充 `bubble-message` 和 `bubble-lift` 日志，并在开始/停止听写时把悬浮小猫重新抬到最前，降低被主窗口盖住导致“猫消失”的概率。
+- 已重新打包并同步到真实入口 `D:\YayaMind`，当前用户测试入口为 `D:\YayaMind\YayaMind.exe`。
+### 验证
+- `node --check electron/main.cjs` 通过。
+- `node --check electron/preload.cjs` 通过。
+- `npm run build` 通过。
+- `npm run desktop:pack` 通过。
+- 真实入口 `/api/bootstrap` 返回 200。
+### 下一步实测口径
+- 用户点击小猫说一句，再点一次结束后，检查 `desktop-cat.log` 最新尾部是否出现 `native-voice-stop`、`desktop-recognized-text`、`parse-preview-success`，并确认小猫回休息态但气泡仍显示理解结果。
+
+## 2026-06-16 云转文字链路回退到 Windows 系统听写
+### 完成
+- 本轮只处理云转文字和桌面小猫点击后立刻回休息的问题，未改后续 AI 转写/理解策略。
+- 回溯现状：历史日志显示曾经试过 Chromium Web Speech、Windows `System.Speech`、WinRT modern STT 和“Electron 录音 -> 后端 `/api/stt/transcribe`”。当前源码里的主入口已经切到未闭环的录音后端 STT，但 preload/前端没有 `start-recording`/`stop-recording` 接收链路，因此小猫会进入听写态后很快回落，且没有转写结果。
+- 真实日志显示 WinRT helper 在安装版里会以 `windows-modern-winrt` 启动，但 0.5 秒左右报 `No speech result`；本轮 smoke test 进一步确认 PowerShell 5 不能稳定加载 WinMD 引用，继续沿这条 helper 小修不可取。
+- `electron/main.cjs`：桌面小猫听写改为 Windows 系统听写桥。点击小猫后触发 `Win + H`，第二次点击后再次触发 `Win + H` 关闭听写，不再启动未接通的录音后端 STT。
+- `src/App.tsx` / `src/styles.css`：Electron 桌面模式下新增隐藏听写捕获框，系统听写输入会实时同步到小猫气泡，停止后把捕获文本交给现有理解预览。
+### 验证
+- `node --check electron/main.cjs` 通过。
+- `node --check electron/stt-helper.cjs` 通过。
+- `npm run build` 通过。
+- Vite 预览已启动在 `http://127.0.0.1:5173`。
+### 未完全验证
+- 当前机器已有多个 `D:\YayaMind\YayaMind.exe` 进程占用生产 API/缓存，开发态 Electron 打开时被缓存冲突关闭；本轮未打包、未同步真实入口。
+- 下一步需要在可交互桌面环境点开发态或后续打包版小猫，说一句话，确认 Windows 听写文字能进入气泡。
+
+## 2026-06-15 桌面小猫改为 Windows 本机语音主链路
+### 完成
+- 回答并确认当前音转文字方案：此前桌面版同时启动 Windows `System.Speech` 和 Chromium Web Speech；日志显示 Web Speech 在真实入口连续 `network` 报错，不适合作为桌面小猫主识别源。
+- `electron/main.cjs`：桌面小猫单击后只启动 Windows `System.Speech.Recognition.SpeechRecognitionEngine(zh-CN)`，不再同时触发 `desktop-cat:start-voice` 去启动 Web Speech，避免网络错误把状态打回失败。
+- `electron/main.cjs`：第二次点击停止听写时只写入 Windows 识别停止信号并等待 final 文本；final 不再因为 `stopRequested` 被丢弃，识别到文本后继续通过 `desktop-cat:recognized-text` 交给前端解析。
+- `electron/main.cjs`：为桌面语音增加 `desktopVoiceSessionId`，防止旧识别进程迟到结果污染新一轮；Windows 识别失败时向前端发送 `desktop-cat:voice-error`，并更新托盘状态。
+- 已重新执行 `npm run desktop:pack`，并把 `D:\YayaMindBuild\release\win-unpacked` 同步到真实入口 `D:\YayaMind`，随后从 `D:\YayaMind\YayaMind.exe` 冷启动。
+### 验证
+- `node --check electron/main.cjs` 通过。
+- `npx tsc --noEmit --pretty false` 通过。
+- 本机已检测到 Windows 中文桌面识别器：`zh-CN | MS-2052-80-DESK`。
+- `npm run desktop:pack` 通过。
+- 真实入口 `http://127.0.0.1:8787/api/bootstrap` 返回 200。
+- 安装目录 `D:\YayaMind\resources\app\electron\main.cjs` 已包含 `windows-speech-start`、`windows-speech-final` 和 `desktopVoiceSessionId`；未再包含 `renderer-speech-start`。
+### 未完全验证
+- 当前环境不能替用户对真实麦克风说话；需要用户点击桌面小猫，说一句话后再点一次结束，观察气泡是否出现实时文字和理解卡片。若仍失败，下一步直接看 `D:\YayaMindData\userData\desktop-cat.log` 中最新 `windows-speech-*` 事件。
+
+## 2026-06-15 同步桌面小猫双通道语音修复
+### 完成
+- 接收并核对当前修复方案：Electron Web Speech 在当前环境会报 `network`，不能作为主识别源；桌面版改为 Windows `System.Speech` 主通道 + Web Speech 兜底。
+- 确认 `electron/main.cjs` 中 `startDesktopVoiceInput()` 会同时发送 `desktop-cat:start-voice` 和启动 `recognizeWithWindowsSpeech()`。
+- 确认 Windows Speech partial 会通过 `desktop-cat:voice-partial` 回传，前端 `onVoicePartial` 会更新 input，从而带动小猫气泡实时显示转写。
+- 重新打包并同步 `D:\YayaMindBuild\release\win-unpacked` 到真实入口 `D:\YayaMind`，已从 `D:\YayaMind\YayaMind.exe` 启动。
+### 验证
+- `node --check electron/main.cjs` 通过。
+- `node --check electron/preload.cjs` 通过。
+- `npx tsc --noEmit --pretty false` 通过。
+- `npm run desktop:pack` 通过。
+- 真实入口 `/api/bootstrap` 返回 200。
+- 安装目录 `D:\YayaMind\resources\app\electron\main.cjs` 已包含 `recognizeWithWindowsSpeech`、`desktop-cat:voice-partial`、`windows-speech-partial`。
+- 安装目录 `D:\YayaMind\resources\app\electron\preload.cjs` 已包含 `desktop-cat:voice-partial` 和 `onVoicePartial`。
+- 日志确认 Web Speech 曾返回 `voice-renderer errorName=network`，也确认 media 权限为 `allowed:true`。
+### 未完全验证
+- 当前环境不能替用户对真实麦克风说话；最终还需要用户点击小猫说一句，观察气泡是否实时出字，并检查日志是否出现 `windows-speech-partial`。
+
+## 2026-06-15 桌面小猫语音改用渲染端 Web Speech
+### 完成
+- 排查真实入口日志，确认此前“没听到”的直接表现是 Windows 原生语音链路退出为 `Windows speech exited with 2`，且没有 partial/final 转写输出。
+- `electron/main.cjs`：桌面小猫点击后默认通知主窗口启动渲染端 Web Speech，不再默认走 Windows `System.Speech` 进程。
+- `electron/main.cjs`：`media/microphone` 权限判断改为信任主窗口/小猫窗口，并补充 `pageUrl`、`requestOrigin` 日志，修复空 origin 下 media 权限被误拒的风险。
+- `src/App.tsx`：保留“听写中实时显示转写，第二次点击后提交解析”的流程，并补充 `speech-api-unavailable`、`ready`、`result`、`error` 等诊断日志。
+- 重新打包并同步 `D:\YayaMindBuild\release\win-unpacked` 到真实入口 `D:\YayaMind`，已启动 `D:\YayaMind\YayaMind.exe`。
+### 验证
+- `node --check electron/main.cjs` 通过。
+- `npx tsc --noEmit --pretty false` 通过。
+- `npm run desktop:pack` 通过。
+- 真实入口 `/api/bootstrap` 返回 200。
+- 安装目录 `D:\YayaMind\resources\app\electron\main.cjs` 已包含 `renderer-speech-start` 和新的 microphone 权限逻辑；前端 bundle 已包含语音诊断日志。
+- 最新启动日志中 `media` 权限在空 origin 下返回 `allowed:true`。
+### 未完全验证
+- 当前环境不能替用户对真实麦克风说话；下一步需用户点小猫说一句，检查气泡是否实时显示转写，以及日志是否出现 `voice-renderer` 的 `ready/result`。
+
+## 2026-06-15 桌面小猫语音提交与 rewrite 展示修复
+### 完成
+- `electron/main.cjs`：第二次点击小猫从“取消会话”改成“停止录音并等待 final 文本”，不再把用户说完后的 stop request 记录成 `windows-speech-cancelled` 并丢弃结果。
+- `electron/main.cjs`：Windows `SpeechHypothesized` partial 改为“已确认分段 + 当前假设文本”的累计输出，方便气泡实时显示正在说的话。
+- `src/App.tsx`：语音输入改为“听写中只实时显示转写；点击结束后调用 `/api/input/parse` 做意图识别和 query rewrite；展示理解卡片”，不再在停顿 1.8 秒后自动提交。
+- `src/App.tsx` / `src/styles.css`：理解卡片显示“实时转写 / AI改写”，并补充“确认记录”按钮，让 rewrite 和 intent 可见后再写入。
+- 重新执行 `npm run desktop:pack`，同步 `D:\YayaMindBuild\release\win-unpacked` 到真实入口 `D:\YayaMind`，并清理安装目录旧 hashed assets。
+### 验证
+- `node --check electron/main.cjs`、`node --check electron/preload.cjs` 通过。
+- `npx tsc --noEmit --pretty false` 通过。
+- `npm run build` 和 `npm run desktop:pack` 通过。
+- API 回放 `项目代办明天下午三点提交表格`：返回 `intent=add_task`，并带 `transcription.originalText=项目代办...`、`transcription.correctedText=项目待办...`。
+- 打包版 `http://127.0.0.1:8787` 可打开，`/api/bootstrap` 返回 200。
+- 从 `D:\YayaMind\YayaMind.exe` 启动真实入口成功；安装目录 assets 只保留本次构建的 `index-DExZZLqL.js`、`index-fwAW7gqQ.css` 和两张猫图。
+- 抽取真实入口内嵌 PowerShell 语音脚本做语法解析，结果为 `PowerShell speech script syntax OK`。
+### 未完全验证
+- 当前环境无法替用户真实开口说话，因此麦克风实际拾音质量、Windows 语音引擎 partial/final 产出仍需用户点小猫实测一句。若仍无文本，下一步应看新版日志里是否出现 `windows-speech-result`、`windows-speech-empty` 或 `windows-speech-stop-error`。
+
+## 2026-06-15 桌面语音输入与小猫气泡收口
+
+### 完成
+- `electron/main.cjs`：修复 Windows 语音识别 PowerShell 子进程在空结果/超时后不稳定退出的问题，增加 `ERROR:` 结构化输出和 `[Environment]::Exit($exitCode)`，避免应用只记录 `Windows speech exited with 2`。
+- `src/App.tsx`：桌面壳模式下不再渲染主工作台右下角 `.cat-dialog`，对话内容由 Electron 小猫气泡窗口跟随小猫显示。
+- `electron/main.cjs`：启动小猫窗口时把旧设置里的 `92x92` 规范化为 `360x190` 并写回，避免消息气泡被裁切。
+- `electron/main.cjs`：桌面语音从 `RecognizeMode::Single` 改为 `RecognizeMode::Multiple`，点击小猫开始持续听写，再次点击写入停止信号文件，正常收尾并汇总多段识别文本。
+- `electron/main.cjs`：修复手动听写脚本在真实入口中 0.3 秒退出的问题。根因是生成的 `.ps1` 在 Windows PowerShell 下出现字符串/编码解析失败；现已改为写入 UTF-8 BOM，并把脚本中的状态前缀字符串改为 ASCII 单引号，避免解析失败。
+- `src/App.tsx`：桌面听写提示改为“我在听，你可以一直说；说完再点我一下。”
+- 已执行 `npm run desktop:pack`，并把 `D:\YayaMindBuild\release\win-unpacked` 覆盖同步到真实入口 `D:\YayaMind`。
+
+### 验证
+- `node --check electron/main.cjs` 通过。
+- `npm run build` 通过。
+- `npm run desktop:pack` 通过。
+- 从 `D:\YayaMind\YayaMind.exe` 启动后，`http://127.0.0.1:8787/api/bootstrap` 返回 200。
+- `D:\YayaMindData\userData\desktop-settings.json` 已写回 `width: 360`、`height: 190`。
+- 真实入口 `D:\YayaMind\resources\app\electron\main.cjs` 已确认包含 `RecognizeMode::Multiple`、`RecognizeAsyncStop()` 和 `windows-speech-stop-*` 停止信号逻辑。
+- 使用同类 `.ps1 + 停止信号` 命令行烟测通过，返回 `code: 0`、`FINAL:`、无 stderr，说明解析错误已消除。
+
+### 未完全验证
+- 语音链路已验证 Windows 中文识别器存在、识别脚本可正常退出，但没有在本轮用真实麦克风逐字说话验证识别文本质量；需要用户点小猫实际说一句确认。
+
+## 2026-06-15 修复前端 404 问题
+
+### 问题
+打包版 YayaMind 桌面应用启动后，前端页面显示 `{"message":"Route GET:/ not found","error":"Not Found","statusCode":404}`，但后端 API 正常。
+
+### 原因
+`electron/server-runner.cjs` 没有设置 `DESKTOP_STATIC_DIR` 环境变量，导致 Fastify 没有注册静态文件路由。
+
+### 修复
+修改 `electron/server-runner.cjs`，添加环境变量兜底值：
+```javascript
+process.env.DESKTOP_STATIC_DIR = process.env.DESKTOP_STATIC_DIR || path.join(__dirname, '..', 'dist');
+```
+
+### 验证
+- `GET /` → 200，返回 `index.html`
+- `GET /api/bootstrap` → 200
+- `GET /assets/...` → 200
+
+### 修改文件
+- `electron/server-runner.cjs`
+
+---
+
+## 2026-06-15 日程陪伴感、手动新增和个人习惯设置
+
+### 已完成
+
+- 提醒冒泡改为只对“刚刚触发”的提醒显示，旧的已触发提醒不会在每次打开日程时重复打扰。
+- 没有提醒和交互状态时，小猫会按凌晨、早上、中午、下午、晚上、深夜给短句问候；问候文案保留陪伴感，并参考用户设置的睡觉时间。
+- 右侧日期详情标题旁新增小加号，点击后可手动新增日程；表单包含标题、日期、开始/结束时间、类型、准备事项和备注，保存后写入 `events.jsonl` 并刷新日程。
+- 个人画像页新增“个人习惯”区，支持设置起床时间、睡觉时间、休息制度和法定节假日显示；日程时间轴会按作息范围显示。
+- 一周日程新增休息日浅暖色标记，双休/单休/大小周可配置；休息日不使用灰色弱化。
+- 桌面小猫悬浮窗新增上方消息气泡，主工作台的小猫消息会同步到桌面小猫上方，避免规划框只困在应用窗口右下角。
+- 项目待办页字号和间距下调：项目标题 17px、待办标题 14px、行高更紧凑。
+
+### 验证
+
+- `npx tsc --noEmit --pretty false` 通过。
+- `npm run build` 通过。
+- 本地后端 `http://127.0.0.1:8787/api/bootstrap` 返回 200。
+- 本地前端 `http://127.0.0.1:5173` 返回 200。
+- 浏览器验收：日程时间轴显示 06:00-22:00，周六/周日有“休”标记，右侧有“新增日程”按钮，个人画像页有 4 个个人习惯控件，待办标题字号为 14px。
+- API 和 UI 均验证手动新增日程可写入；测试日程已通过删除接口软删除清理。
+
+### 未完成和风险
+
+- 本轮未执行 `npm run desktop:pack`，也未同步到真实安装目录 `D:\YayaMind`；按项目规则，这是阶段收口时再做。
+- 法定节假日当前先支持常见固定日期显示，暂未接入每年调休/补班数据。
+- 桌面小猫气泡已完成代码链路，但本轮未做打包版真实桌面截图验收。
+
+## 2026-06-15 桌面版安装目录同步规则沉淀
+
+### 背景
+
+本轮复盘前发现：用户电脑重启后，桌面小猫又显示成早期橙色圆底/灰色方块版本。排查后确认不是源码回滚，也不是透明 PNG 失效，而是桌面快捷方式、开始菜单和重启后的真实入口都指向 `D:\YayaMind\YayaMind.exe`，而前几轮主要更新的是 `D:\YayaMindBuild\release\win-unpacked\YayaMind.exe`。因此用户实际打开的是旧安装目录里的旧资源。
+
+### 已完成
+
+- 重新执行 `npm run desktop:pack`。
+- 将 `D:\YayaMindBuild\release\win-unpacked` 同步到真实安装目录 `D:\YayaMind`。
+- 删除 `D:\YayaMind` 中旧的 hashed 猫图资源，只保留当前认可的 `cat-sleeping` / `cat-listening` 资源。
+- 从 `D:\YayaMind\YayaMind.exe` 启动验证，确认真实入口使用的是最新资源。
+- 截图验证当前悬浮小猫没有旧橙色圆底和灰色方块，截图路径：`.run-logs\current-desktop-cat-after-sync.png`。
+
+### 沉淀规则
+
+- 日常开发只修改源码目录 `D:\obsidian\MyVault\07_项目\个人助手`，不要每个小改都同步到安装目录。
+- 阶段收口、复盘、用户明确说“一轮结束”时，必须打包并同步到真实安装目录 `D:\YayaMind`。
+- 同步后必须从桌面快捷方式或 `D:\YayaMind\YayaMind.exe` 启动验证，不能只验证 build 输出目录。
+- 桌面视觉资源收口时，要清理旧备份图、旧 hashed 资源和临时预览图，避免旧图再次被误加载。
+
+## 2026-06-12 桌面小猫第二轮优化与 D 盘迁移
+
+### 已完成
+- 重做 `electron/bubble.html`：去掉头像图片和矩形底，改为透明背景内联 SVG 小布偶猫，包含默认睡觉态和单击后的倾听态。
+- 桌面小猫鼠标样式改为 `grab` / `grabbing`，并用 8px 位移阈值区分普通单击和拖动。
+- 单击、双击、拖动重新拆分：单击延迟 230ms 后触发语音；双击取消单击并只打开/聚焦主工作台；拖动不触发单击/双击。
+- `electron/preload.cjs` 增加 `desktop-cat:start-voice` 排队，避免主工作台刚创建时 React 监听尚未注册导致单击语音事件丢失。
+- `src/App.tsx` 增加桌面小猫语音状态回传：语音开始显示“我在听”，不支持或启动失败时回传 error 状态并给明确提示。
+- `electron/main.cjs` 增加桌面小猫日志：click、double click、drag start/end、voice start、bubble show/hide/close、renderer gone。
+- 小猫悬浮窗关闭或渲染进程异常退出时会自动重建；托盘菜单中文文案修复，并保留显示/隐藏小猫入口。
+- YayaMind 桌面应用产物和缓存迁移到 `D:\YayaMind`：release、userData、sessionData、npm 缓存、Electron 缓存、electron-builder 缓存均落在 D 盘。
+- `package.json` 的 `desktop:pack` / `desktop:dist` 已改为输出到 `D:\YayaMind\release`，并在脚本内指定 Electron 相关缓存目录。
+- `electron/main.cjs` 设置 `app.setPath('userData', 'D:\YayaMind\userData')` 和 `app.setPath('sessionData', 'D:\YayaMind\sessionData')`，避免运行时重新写入 C 盘 YayaMind 目录。
+
+### 验证
+- `npm run build` 通过。
+- `node --check electron/main.cjs` 和 `node --check electron/preload.cjs` 通过。
+- `npm run desktop:dist` 通过，生成目录版 EXE、NSIS 安装包和 portable EXE。
+- 启动 `D:\YayaMind\release\win-unpacked\YayaMind.exe` 后，`http://127.0.0.1:8787/api/bootstrap` 返回 200，确认打包版可自启动本地 API 并加载业务。
+- 验证 `C:\Users\17978\AppData\Local\YayaMind`、`C:\Users\17978\AppData\Roaming\YayaMind`、`%TEMP%\yayamind-pack-test`、`%TEMP%\yayamind-dist-test` 均不存在。
+- `npm config get cache` 返回 `D:\YayaMind\cache\npm`。
+
+### 备注
+- 当前安装包仍使用默认 Electron 图标，后续可补正式 `.ico`。
+- 旧桌面快捷方式如果指向 C 盘，需要删除后重新运行 `D:\YayaMind\release\YayaMind Setup 0.1.0.exe` 安装生成。
+
+
+## 2026-06-12 桌面悬浮小猫应用壳 MVP
+
+### 已完成
+
+- 安装 Electron，并在 `package.json` 增加 `main`、`desktop:dev`、`desktop:open` 和 `desktop:electron` 脚本。
+- 新增 `electron/main.cjs`：负责创建透明置顶悬浮小猫窗口，靠边吸附/缩进，并在双击时打开完整 YayaMind 主工作台。
+- 新增 `electron/preload.cjs`：用 IPC 暴露拖动、展开、吸边和打开主窗口接口，避免在悬浮球页面直接启用 Node。
+- 新增 `electron/bubble.html`：实现第一版圆形小猫悬浮入口，支持拖动、双击、靠边状态样式。
+- 本轮继续优化桌面入口：删除吸附/缩进/鼠标移入展开逻辑，悬浮窗拖到哪里就停在哪里，并把位置写入 Electron `userData/desktop-settings.json`。
+- 桌面悬浮窗改用 `src/assets/ragdoll-avatar.png`，视觉上和原工作台布偶猫入口一致；Electron 模式下主工作台不再渲染第二个猫脸。
+- 单击桌面小猫通过 IPC 触发主工作台原有 `startVoiceInput()`，双击仅打开或聚焦主工作台。
+- 新增睡觉态/倾听态两种桌面小猫姿态，并移除应用内小猫右下角 `Zz` 状态字样。
+- 新增系统托盘菜单：打开主工作台、显示/隐藏小猫悬浮窗、开机自启、退出应用。
+- 新增开机自启开关和持久化设置，使用 Electron `app.setLoginItemSettings` 应用状态。
+- 新增单实例锁，重复启动应用时聚焦主工作台，避免多个 Electron 实例抢占缓存和托盘。
+- 安装 `electron-builder`，新增 `desktop:pack` 和 `desktop:dist` Windows 打包脚本及基础安装包配置。
+
+### 验证
+
+- `npm run build` 通过，确认现有 Web 工作台构建未受桌面壳影响。
+- 在本地服务已占用 5173/8787 的场景下，`npm run desktop:open` 可拉起 Electron 进程；验证后已清理测试进程，无残留。
+- `npx tsc --noEmit --pretty false` 通过。
+- `node --check electron/main.cjs` 和 `node --check electron/preload.cjs` 通过。
+- `npm audit --omit=dev` 为 0 vulnerabilities。
+
+### 下一步
+
+- 运行真实桌面手感验收：检查无灰底、无第二个猫脸、不吸附、单击听写、双击打开、关闭主窗口后小猫仍保留、托盘菜单可用。
+- `desktop:dev` 本轮未强制重启，因为本机已有 5173/8787 服务运行；当前使用 `desktop:open` 验证桌面壳。
+- Fastify 本地 API 生产自启动已纳入 Electron 包；当前 EXE 已验证不依赖开发命令也能启动业务。
+
 ## 2026-06-10 项目收尾文档与面试材料
 
 ### 已完成
@@ -518,3 +812,25 @@
 ### 风险
 
 - 浏览器语音识别本身仍需用户真实麦克风环境验收；本轮已通过代码路径确认追问后会自动调用 `startVoiceInput({ silent: true })`，但无法在 headless Chrome 中模拟系统语音输入。
+# 2026-06-12 桌面小猫语音实时转写与取消语义修正
+
+## 已完成
+
+- 桌面版 Windows 语音识别改为通过 `SpeechHypothesized` 事件实时发送转写草稿，前端继续写入小猫气泡里的转写区域。
+- 听写中再次单击小猫改为“取消当前会话”：清空当前输入、追问/决策状态和修改状态，小猫回到睡觉状态。
+- 修复手动取消后仍被记录为 `windows-speech-empty` 的问题；取消现在记录为 `windows-speech-cancelled`，不会再提示“刚才没听清”。
+- 明确语音理解链路：原始语音实时转写 -> AI/规则纠错 rewrite -> 意图判断 -> 缺槽追问或写入。
+- 回放验证 `明天上午有会要开`：解析为 `add_event`，日期为 2026-06-13，因缺少具体几点返回追问 `明天上午几点开会？`。
+
+## 验证
+
+- `node --check electron/main.cjs` 通过。
+- `npm run build` 通过。
+- `npm run desktop:pack` 通过，最新 EXE 输出到 `D:\YayaMindBuild\release\win-unpacked\YayaMind.exe`。
+- 打包版真实启动后模拟单击开始、再次单击取消：日志出现 `voice-start-request`、`bubble-state:listening`、`voice-stop-request`、`bubble-state:sleeping`、`windows-speech-cancelled`。
+- API 回放 `/api/input/parse`：`明天上午有会要开` 正确进入缺具体时间追问，不直接写入。
+
+## 后续
+
+- 仍需用户在真实麦克风环境下验证实时转写的颗粒度；当前代码已支持 partial，但 Windows 识别引擎实际输出频率取决于系统语音服务。
+- 新用户教程需要覆盖：单击开始说话、再次单击取消、双击打开/关闭工作台、缺时间/缺事项时如何回答追问、听不清时重新说一遍。

@@ -64,6 +64,40 @@ AI 配置：
 - 填入 `DEEPSEEK_API_KEY` 后重启后端。
 - 可访问 `http://localhost:8787/api/ai/status` 确认当前 AI provider、model 和 key 是否生效；接口不会返回密钥。
 
+## 桌面应用与 D 盘目录
+
+YayaMind 桌面版使用 Electron。当前桌面应用产物、运行数据和缓存统一放在 `D:\YayaMind`，避免占用 C 盘。
+
+常用入口：
+
+```powershell
+npm run desktop:dev
+npm run desktop:pack
+npm run desktop:dist
+```
+
+打包输出：
+
+```text
+D:\YayaMind\release\win-unpacked\YayaMind.exe
+D:\YayaMind\release\YayaMind Setup 0.1.0.exe
+D:\YayaMind\release\YayaMind 0.1.0.exe
+```
+
+运行与缓存目录：
+
+```text
+D:\YayaMind\userData
+D:\YayaMind\sessionData
+D:\YayaMind\cache\npm
+D:\YayaMind\cache\electron
+D:\YayaMind\cache\electron-builder
+```
+
+如果要日常直接启动，双击 `D:\YayaMind\release\win-unpacked\YayaMind.exe`。如果要创建桌面快捷方式，运行 `D:\YayaMind\release\YayaMind Setup 0.1.0.exe`。
+
+打包版已验证可脱离命令行启动，本地 API `http://127.0.0.1:8787/api/bootstrap` 返回 200。
+
 ## 部署与作品集预览
 
 当前项目支持 Vercel 作品集预览：本地后端可用时使用真实数据；线上没有 `/api` 后端时，会自动进入演示数据，保证面试官打开链接能看到产品形态。
@@ -91,12 +125,21 @@ personal-assistant-data/
 
 ## 文档
 
-- 项目上下文：[PROJECT_CONTEXT.md](PROJECT_CONTEXT.md)
+本文档面向外部展示和运行入口说明，不是日常开发依据。日常开发优先读：
+
+- 产品需求：[PRD.md](PRD.md)
+- 系统设计：[SDD.md](SDD.md)
 - 当前任务：[TODO.md](TODO.md)
-- 推进记录：[TASK_LOG.md](TASK_LOG.md)
+- 文件定位：[FILE_INDEX.md](FILE_INDEX.md)，供开发者快速定位代码、数据、日志和资源文件。
+
+按需回溯和展示材料：
+
+- 项目上下文与历史摘要：[PROJECT_CONTEXT.md](PROJECT_CONTEXT.md)
+- 模块 SDD 细节：[docs/sdd/](docs/sdd/)
 - 架构与演示：[docs/portfolio/](docs/portfolio/)
-- SDD 文档：[docs/sdd/](docs/sdd/)
 - 面试材料：[docs/interview/](docs/interview/)
+- 历史推进记录：[TASK_LOG.md](docs/archive/TASK_LOG.md)
+- 历史决策记录：[DECISIONS.md](docs/archive/DECISIONS.md)
 
 ## 面试材料
 

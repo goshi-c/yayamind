@@ -19,13 +19,16 @@ const allowedIntents: ParsedIntent[] = [
 
 let cachedEnv: Record<string, string> | null = null;
 
-export async function parseTextWithAi(text: string, now: string): Promise<ParseResult | null> {
+export async function parseTextWithAi(
+  text: string,
+  now: string,
+  context: { projectTitles?: string[] } = {}
+): Promise<ParseResult | null> {
   const env = await getEnv();
-  const apiKey = getApiKey(env);
-  if (!apiKey || !text.trim()) return null;
+  const config = await getAiRuntimeConfig(env);
+  if (!config.apiKey || !config.enabled || !text.trim()) return null;
 
-  const baseUrl = (env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com').replace(/\/+$/, '');
-  const model = env.DEEPSEEK_MODEL || 'deepseek-chat';
+  const { apiKey, baseUrl, model } = config;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10_000);
 
@@ -44,7 +47,7 @@ export async function parseTextWithAi(text: string, now: string): Promise<ParseR
         messages: [
           {
             role: 'system',
-            content: buildSystemPrompt(now)
+            content: buildSystemPrompt(now, context)
           },
           {
             role: 'user',
@@ -68,12 +71,11 @@ export async function parseTextWithAi(text: string, now: string): Promise<ParseR
 
 export async function correctTranscribedTextWithAi(text: string): Promise<string | null> {
   const env = await getEnv();
-  const apiKey = getApiKey(env);
+  const config = await getAiRuntimeConfig(env);
+  const { apiKey, baseUrl, model } = config;
   const original = text.trim();
-  if (!apiKey || original.length < 3) return null;
+  if (!apiKey || !config.enabled || original.length < 3) return null;
 
-  const baseUrl = (env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com').replace(/\/+$/, '');
-  const model = env.DEEPSEEK_MODEL || 'deepseek-chat';
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 6_000);
 
@@ -94,6 +96,7 @@ export async function correctTranscribedTextWithAi(text: string): Promise<string
             role: 'system',
             content: [
               '你是 YayaMind 的中文语音转写纠错器，只修明显语音识别错误，不解析意图，不补充事实。',
+              '不要总结、不要改写成短标题、不要删除用户说过的任务细节。',
               '保留用户原本的口语语气、时间、地点、项目名和任务内容。',
               '优先修正同音误识别，例如“项目代办”应为“项目待办”，“待办”不要写成“代办”。',
               '如果原文已经通顺，原样返回。',
@@ -118,13 +121,16 @@ export async function correctTranscribedTextWithAi(text: string): Promise<string
 
 export async function getAiStatus() {
   const env = await getEnv();
+  const config = await getAiRuntimeConfig(env);
   const rawKey = env.DEEPSEEK_API_KEY || env.DEEPSIG_API_KEY || '';
   return {
-    provider: 'deepseek',
-    configured: Boolean(getApiKey(env)),
+    provider: config.provider,
+    configured: Boolean(config.apiKey),
+    enabled: config.enabled,
     keyLooksPlaceholder: Boolean(rawKey && isPlaceholderKey(rawKey)),
-    baseUrl: env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com',
-    model: env.DEEPSEEK_MODEL || 'deepseek-chat'
+    baseUrl: config.baseUrl,
+    model: config.model,
+    source: config.source
   };
 }
 
@@ -137,13 +143,50 @@ function parseCorrectedText(content: string) {
 function isSafeCorrection(original: string, corrected: string) {
   if (!corrected) return false;
   if (corrected.length > Math.max(12, original.length * 1.8)) return false;
-  if (corrected.length < Math.max(1, original.length * 0.45)) return false;
+  if (corrected.length < Math.max(1, original.length * 0.75)) return false;
   return true;
 }
 
 function getApiKey(env: Record<string, string>) {
   const value = env.DEEPSEEK_API_KEY || env.DEEPSIG_API_KEY || '';
   return value && !isPlaceholderKey(value) ? value : '';
+}
+
+async function getAiRuntimeConfig(env: Record<string, string>) {
+  const settings = await readLocalAiSettings();
+  const settingsKey = settings.apiKey && !isPlaceholderKey(settings.apiKey) ? settings.apiKey : '';
+  return {
+    provider: settings.provider || 'deepseek',
+    enabled: settings.enabled !== false,
+    apiKey: settingsKey || getApiKey(env),
+    baseUrl: (settings.baseUrl || env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com').replace(/\/+$/, ''),
+    model: settings.model || env.DEEPSEEK_MODEL || 'deepseek-chat',
+    source: settingsKey ? 'settings' : 'env'
+  };
+}
+
+async function readLocalAiSettings(): Promise<{
+  provider?: 'deepseek' | 'openai-compatible';
+  enabled?: boolean;
+  baseUrl?: string;
+  model?: string;
+  apiKey?: string;
+}> {
+  try {
+    const dataDir = process.env.YAYAMIND_DATA_DIR || join(process.cwd(), 'personal-assistant-data');
+    const content = await readFile(join(dataDir, 'settings.json'), 'utf8');
+    const parsed = JSON.parse(content) as { ai?: Record<string, unknown> };
+    const ai = parsed.ai ?? {};
+    return {
+      provider: ai.provider === 'openai-compatible' ? 'openai-compatible' : 'deepseek',
+      enabled: ai.enabled !== false,
+      baseUrl: typeof ai.baseUrl === 'string' ? ai.baseUrl.trim() : undefined,
+      model: typeof ai.model === 'string' ? ai.model.trim() : undefined,
+      apiKey: typeof ai.apiKey === 'string' ? ai.apiKey.trim() : undefined
+    };
+  } catch {
+    return {};
+  }
 }
 
 function isPlaceholderKey(value: string) {
@@ -173,7 +216,8 @@ async function getEnv() {
   return env;
 }
 
-function buildSystemPrompt(now: string) {
+function buildSystemPrompt(now: string, context: { projectTitles?: string[] } = {}) {
+  const projectTitles = Array.from(new Set((context.projectTitles ?? []).map((item) => item.trim()).filter(Boolean)));
   return [
     'Before extracting fields, classify whether the user wants to create a new item or operate on an existing calendar event.',
     'Use delete_event for existing-event deletion/cancel/removal, update_event for reschedule/modify/correction, annotate_event for adding notes/preparations. Use add_event only for a new event.',
@@ -184,11 +228,15 @@ function buildSystemPrompt(now: string) {
     '如果是会议、面试、约见、电话、训练、吃饭、休息、明确时间块，intent 用 add_event。',
     '如果只有“下午/上午/晚上/明天上午”但没有具体几点，必须 needsConfirmation=true，并给一个短 questions。',
     '如果只有具体时间但没有说明做什么，也必须 needsConfirmation=true；不要把标题当成需要用户填写的问题。',
-    'title 必须由用户原话归纳，优先归纳为“开会/上课/面试/提醒/任务/待补充安排”，绝对不要追问用户标题。',
+    '日程 title 必须由用户原话归纳成 2-3 个中文短标题，优先归纳为“开会/上课/面试/重构/改稿/提醒/任务/休息”，绝对不要机械截取原话前三个字，也不要追问用户标题。',
     '不要瞎编具体时间；没有具体几点就不要填 startAt/endAt。',
     '明确时间请用 ISO 字符串，保留 +08:00 时区，例如 2026-06-04T15:00:00+08:00。',
     '日程字段建议：title,type,date,startAt,endAt,purpose,preparations,notes,estimatedMinutes。',
     '任务字段建议：title,dueAt,estimatedMinutes,preparations,notes。',
+    projectTitles.length
+      ? `当前已有项目分类词表：${projectTitles.join('、')}。如果用户提到这些项目名或近似同音词，fields.projectTitle 必须使用词表里的原始项目名；不要新造项目名。`
+      : '当前没有可用项目分类词表；无法确定项目时不要新造项目名。',
+    '项目待办的 title 必须保留用户真正要做的完整事项内容，不要只输出“任务/待办/同步/处理”这类短泛化词。',
     '提醒字段建议：title,remindAt,relatedType。',
     '输出格式：{"intent":"add_event","confidence":0.9,"needsConfirmation":false,"fields":{},"questions":[],"warnings":[]}'
   ].join('\n');
